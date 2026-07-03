@@ -407,6 +407,9 @@ function dlCSV(name, rows){
 const txInMonth = m => S.tx.filter(t => t.date && t.date.startsWith(m));
 const sumTx = (list, type) => list.filter(t => t.type === type).reduce((a,t) => a + num(t.amount), 0);
 function daysInMonth(m){ const [y,mo] = m.split("-").map(Number); return new Date(y, mo, 0).getDate(); }
+/* 会計単位のキー: 複数メニュー会計(来店処理)は同じsaleIdを共有する。旧データ(saleIdなし)は1行=1会計 */
+const saleKey = t => t.saleId || t.id;
+const salesCount = list => new Set(list.map(saleKey)).size;
 function monthSummary(m){
   const list = txInMonth(m);
   const incList = list.filter(t => t.type === "income");
@@ -414,7 +417,7 @@ function monthSummary(m){
   const exp = sumTx(list, "expense");
   const mat = list.filter(t => t.type === "expense" && t.category === "材料費").reduce((a,t) => a + num(t.amount), 0);
   const retail = incList.filter(t => t.category === "店販(商品売上)").reduce((a,t) => a + num(t.amount), 0);
-  const count = incList.length;
+  const count = salesCount(incList);
   return { inc, exp, profit: inc - exp, mat, retail, count, avg: count ? Math.round(inc / count) : 0 };
 }
 /* 顧客カルテから当月来店客の新規/再来を判定(顧客単位。全来店のうち最古の日付が当月なら新規) */
@@ -562,7 +565,7 @@ V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
 V.closeDate = todayStr(); V.lostDays = 60;
-V.orderFilter = "all"; V.custSel = null; V.custQ = "";
+V.orderFilter = "all"; V.custSel = null; V.custQ = ""; V.chartN = 6;
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
 function render(){
   $("sidebar").innerHTML =
@@ -610,11 +613,13 @@ function heroHtml(){
     <div class="hr-sub">${subs.map(x => `<span>${x}</span>`).join("")}</div>
   </div>`;
 }
+window.setChartN = n => { V.chartN = n; render(); };
 VIEWS.dash = function(){
   const m = thisMonth(), tday = todayStr();
   const s = monthSummary(m);
-  const incToday = S.tx.filter(t => t.date === tday && t.type === "income").reduce((a,t) => a + num(t.amount), 0);
-  const custToday = S.tx.filter(t => t.date === tday && t.type === "income").length;
+  const todayInc = S.tx.filter(t => t.date === tday && t.type === "income");
+  const incToday = todayInc.reduce((a,t) => a + num(t.amount), 0);
+  const custToday = salesCount(todayInc);
   const vs = visitStats(m);
   /* alerts */
   const low = S.inv.filter(i => num(i.qty) <= num(i.minQty) && num(i.minQty) > 0);
@@ -655,8 +660,8 @@ VIEWS.dash = function(){
         ${alerts.length ? alerts.join("") : `<div class="empty">対応が必要な項目はありません</div>`}
       </div>
     </div>
-    <div class="card"><h2>月別収支 <span class="h2-sub">直近6ヶ月</span></h2>
-      ${hasData ? monthlyChartHtml() : `<div class="empty">まだ収支データがありません。「+ 売上を記録」から始めるか、設定画面でサンプルデータを投入してお試しください。</div>`}
+    <div class="card"><h2>月別収支 <span class="h2-sub">直近${V.chartN}ヶ月</span><span style="margin-left:auto;display:inline-flex;gap:4px"><button class="btn sm${V.chartN === 6 ? " pri" : ""}" onclick="setChartN(6)">6ヶ月</button><button class="btn sm${V.chartN === 12 ? " pri" : ""}" onclick="setChartN(12)">12ヶ月</button></span></h2>
+      ${hasData ? monthlyChartHtml(null, V.chartN) : `<div class="empty">まだ収支データがありません。「+ 売上を記録」から始めるか、設定画面でサンプルデータを投入してお試しください。</div>`}
     </div>` +
     breakdownCardsHtml(m);
   attachChartTips();
@@ -671,8 +676,8 @@ function fmtAxis(n){
   return n.toLocaleString("ja-JP");
 }
 let _chartData = [];
-function monthlyChartHtml(base){
-  const months = lastMonths(6, base);
+function monthlyChartHtml(base, n){
+  const months = lastMonths(n || 6, base);
   _chartData = months.map(m => {
     const t = txInMonth(m);
     return { m, inc: sumTx(t, "income"), exp: sumTx(t, "expense") };
@@ -744,6 +749,10 @@ VIEWS.report = function(){
   const mom = sPrev.inc > 0
     ? `前月比 <span style="color:${s.inc >= sPrev.inc ? "var(--good)" : "var(--crit)"}">${(s.inc >= sPrev.inc ? "+" : "−") + Math.abs(Math.round((s.inc - sPrev.inc) / sPrev.inc * 100))}%</span>`
     : "前月実績なし";
+  const sPY = monthSummary(addMonths(m, -12));
+  const yoy = sPY.inc > 0
+    ? ` ・ 前年同月比 <span style="color:${s.inc >= sPY.inc ? "var(--good)" : "var(--crit)"}">${(s.inc >= sPY.inc ? "+" : "−") + Math.abs(Math.round((s.inc - sPY.inc) / sPY.inc * 100))}%</span>`
+    : "";
   let outlook = "";
   if(isCur){
     const day = +todayStr().slice(8), dim = daysInMonth(m);
@@ -761,7 +770,7 @@ VIEWS.report = function(){
     pageHead(`月次レポート`, `${esc(S.settings.name)} ・ ${fmtMonth(m)}`,
       `<button class="btn" onclick="go('dash')">‹ ダッシュボードへ</button>${monthNav(m, "reportNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button><button class="btn" onclick="mailReport()">メールで送る</button><button class="btn" onclick="copyReport()">本文をコピー</button>`) +
     `<div class="tiles">
-      <div class="tile"><div class="t-label">売上</div><div class="t-val">${yen(s.inc)}</div><div class="t-note">${mom}</div></div>
+      <div class="tile"><div class="t-label">売上</div><div class="t-val">${yen(s.inc)}</div><div class="t-note">${mom}${yoy}</div></div>
       <div class="tile"><div class="t-label">支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}</div></div>
       <div class="tile"><div class="t-label">利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div></div>
       <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
@@ -854,8 +863,26 @@ VIEWS.money = function(){
           <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editTx('${t.id}')">編集</button><button class="btn sm ghost" onclick="delTx('${t.id}')">削除</button></td>
         </tr>`).join("")}</table>` : `<div class="empty">${fmtMonth(m)}の記録はまだありません</div>`}</div>
     </div>
-    ${catRows ? `<div class="card"><h2>カテゴリ別集計</h2><div class="twrap"><table><tr><th>区分</th><th>カテゴリ</th><th class="num">合計</th></tr>${catRows}</table></div></div>` : ""}`;
+    ${catRows ? `<div class="card"><h2>カテゴリ別集計</h2><div class="twrap"><table><tr><th>区分</th><th>カテゴリ</th><th class="num">合計</th></tr>${catRows}</table></div></div>` : ""}` +
+    yearSummaryHtml(m.slice(0, 4));
 };
+/* 年間集計(確定申告の下ごしらえ用)。表示中の月の年で集計する */
+function yearSummaryHtml(yr){
+  const ytx = S.tx.filter(t => t.date && t.date.startsWith(yr + "-"));
+  if(!ytx.length) return "";
+  const yInc = sumTx(ytx, "income"), yExp = sumTx(ytx, "expense");
+  const expCat = groupSum(ytx.filter(t => t.type === "expense"), t => t.category || "未分類");
+  return `<div class="card"><h2>${yr}年の年間集計 <span class="h2-sub">確定申告の参考に</span></h2>
+    <div class="hr-sub" style="margin-bottom:10px">
+      <span>収入計 <strong>${yen(yInc)}</strong></span>
+      <span>支出計 <strong>${yen(yExp)}</strong></span>
+      <span>差引 <strong style="color:${yInc - yExp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(yInc - yExp)}</strong></span>
+    </div>
+    ${expCat.length ? `<div class="twrap"><table><tr><th>経費カテゴリ</th><th class="num">年間合計</th></tr>
+      ${expCat.map(([c,v]) => `<tr><td>${esc(c)}</td><td class="num">${yen(v)}</td></tr>`).join("")}</table></div>` : ""}
+    <div class="hint">経費の年間合計です。税区分つきの明細は各月のCSV出力をご利用ください。</div>
+  </div>`;
+}
 function txFields(type){
   return [
     {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
@@ -1048,8 +1075,27 @@ VIEWS.payroll = function(){
           <tr class="total"><td>合計</td><td></td><td></td><td></td><td></td><td></td><td class="num">${yen(sumTotal)}</td><td></td><td></td></tr>
         </table></div>
         <div class="hint">基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。</div></div>`
+        + productivityHtml(m)
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
 };
+/* スタッフ生産性: 時間あたり売上と労働分配率(支給額÷担当売上) */
+function productivityHtml(m){
+  const rows = S.staff.map(st => ({ st, p: calcPay(st, m) })).filter(x => x.p.sales > 0 || x.p.hours > 0);
+  if(!rows.length) return "";
+  return `<div class="card"><h2>スタッフ生産性 <span class="h2-sub">${fmtMonth(m)}</span></h2>
+    <div class="twrap"><table>
+      <tr><th>スタッフ</th><th class="num">担当売上</th><th class="num">勤務時間</th><th class="num">時間あたり売上</th><th class="num">労働分配率</th></tr>
+      ${rows.map(({st, p}) => `<tr>
+        <td style="font-weight:600">${esc(st.name)}</td>
+        <td class="num">${yen(p.sales)}</td>
+        <td class="num">${p.hours.toFixed(1)}h</td>
+        <td class="num">${p.hours > 0 ? yen(Math.round(p.sales / p.hours)) + "/h" : "—"}</td>
+        <td class="num">${p.sales > 0 ? Math.round(p.total / p.sales * 100) + "%" : "—"}</td>
+      </tr>`).join("")}
+    </table></div>
+    <div class="hint">労働分配率 = 支給額 ÷ 担当売上。美容室では40〜60%が一般的な目安といわれます。歩合率や価格設定の見直しの参考に。</div>
+  </div>`;
+}
 window.editAdj = function(staffId){
   const key = staffId + "_" + V.payMonth;
   const adj = S.payAdj[key] || {};
@@ -1457,10 +1503,14 @@ window.checkinAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
   openForm({ title: `${a.name} 様の来店処理(会計)`,
     fields: [
-      {key:"amount", label:"会計金額(円)", type:"number", value: a.price || "", required:true, min:0, half:true},
+      {key:"category", label:"メニュー1(売上カテゴリ)", type:"select", options: INCOME_CATS, value: a.menu, half:true},
+      {key:"amount", label:"金額1(円)", type:"number", value: a.price || "", required:true, min:0, half:true},
+      {key:"menu2", label:"メニュー2(任意)", type:"select", blank:"(なし)", options: INCOME_CATS, half:true},
+      {key:"amount2", label:"金額2(円)", type:"number", min:0, half:true},
+      {key:"menu3", label:"メニュー3(任意)", type:"select", blank:"(なし)", options: INCOME_CATS, half:true},
+      {key:"amount3", label:"金額3(円)", type:"number", min:0, half:true},
       {key:"pay", label:"支払方法", type:"select", options: PAY_METHODS, half:true},
-      {key:"category", label:"メニュー(売上カテゴリ)", type:"select", options: INCOME_CATS, value: a.menu},
-      {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name]), value: a.staffId},
+      {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name]), value: a.staffId, half:true},
       {key:"note", label:"施術メモ(カルテに記録)", type:"textarea"},
       {key:"img", label:"施術写真(カルテに保存)", type:"image"},
       {key:"nextDate", label:"次回予約日(任意)", type:"date", half:true},
@@ -1468,16 +1518,25 @@ window.checkinAppt = function(id){
     ], saveLabel:"会計を確定",
     onsave: v => {
       a.status = "done";
-      S.tx.push({id: uid(), type:"income", date: a.date, category: v.category, amount: v.amount, memo: `${a.name}様`, staffId: v.staffId, pay: v.pay});
-      const used = consumeInv(v.category);
-      let c = S.customers.find(x => x.name === a.name);
+      /* 複数メニューは同じ会計(saleId)として記録し、客数・客単価は1会計=1客で数える */
+      const saleId = uid();
+      const lines = [[v.category, num(v.amount)]];
+      if(v.menu2 && num(v.amount2) > 0) lines.push([v.menu2, num(v.amount2)]);
+      if(v.menu3 && num(v.amount3) > 0) lines.push([v.menu3, num(v.amount3)]);
+      let used = [];
+      lines.forEach(([cat, amt]) => {
+        S.tx.push({id: uid(), saleId, type:"income", date: a.date, category: cat, amount: amt, memo: `${a.name}様`, staffId: v.staffId, pay: v.pay});
+        used = used.concat(consumeInv(cat));
+      });
+      const total = lines.reduce((x, l) => x + l[1], 0);
+      let c = S.customers.find(x => x.id === a.customerId) || S.customers.find(x => x.name === a.name);
       if(!c){ c = {id: uid(), name: a.name, kana:"", phone:"", birthday:"", memo:"", visits: []}; S.customers.push(c); }
-      c.visits.push({id: uid(), date: a.date, menu: v.category, staffId: v.staffId, price: v.amount, note: v.note, img: v.img});
+      c.visits.push({id: uid(), date: a.date, menu: lines.map(l => l[0]).join(" + "), staffId: v.staffId, price: total, note: v.note, img: v.img});
       let msg = "会計を記録し、カルテに反映しました";
       if(v.nextDate){
         const nid = uid();
-        S.appts.push({id: nid, date: v.nextDate, time: v.nextTime || "10:00", name: a.name, customerId: a.customerId, menu: v.category,
-          staffId: v.staffId, price: v.amount, status:"open", dur: a.dur || 60, nominated: a.nominated || "", memo:"次回予約"});
+        S.appts.push({id: nid, date: v.nextDate, time: v.nextTime || "10:00", name: a.name, customerId: c.id, menu: v.category,
+          staffId: v.staffId, price: total, status:"open", dur: a.dur || 60, nominated: a.nominated || "", memo:"次回予約"});
         a.nextApptId = nid;
         msg += `。次回予約 ${fmtDate(v.nextDate)} を登録しました`;
       }
