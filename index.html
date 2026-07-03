@@ -262,7 +262,7 @@ const DEFAULTS = {
   inv: [],        // {id,name,category,qty,unit,minQty,price,menuCat,useQty}
   customers: [],  // {id,name,kana,phone,birthday,memo,visits:[{id,date,menu,staffId,price,note,img}]}
   appts: [],      // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo,dur,nominated,nextApptId}
-  closings: {},   // key 'YYYY-MM-DD' -> {float,actual,memo,closed} レジ締め
+  closings: {},   // key 'YYYY-MM-DD' -> {float,actual,floatCnt:{金種:枚数},actualCnt,memo,closed} レジ締め
   tickets: []     // {id,customerId,name,total,used,price,date,memo} 回数券
 };
 let S = loadState();
@@ -1488,6 +1488,8 @@ window.checkinAppt = function(id){
 /* ================= register closing (レジ締め) ================= */
 window.closeNav = d => { V.closeDate = addDays(V.closeDate, d); render(); };
 window.closeToday = () => { V.closeDate = todayStr(); render(); };
+const DENOMS = [10000, 5000, 2000, 1000, 500, 100, 50, 10, 5, 1];
+let _cashSales = 0; // 表示中日付の現金売上(過不足のライブ計算用)
 VIEWS.closing = function(){
   const d = V.closeDate;
   const inc = S.tx.filter(t => t.type === "income" && t.date === d);
@@ -1497,9 +1499,9 @@ VIEWS.closing = function(){
   inc.forEach(t => { const p = PAY_METHODS.includes(t.pay) ? t.pay : "現金"; byPay[p].n++; byPay[p].v += num(t.amount); });
   const totInc = inc.reduce((a,t) => a + num(t.amount), 0), totExp = exp.reduce((a,t) => a + num(t.amount), 0);
   const c = S.closings[d] || {};
-  const theo = num(c.float) + byPay["現金"].v;
+  _cashSales = byPay["現金"].v;
   const closed = !!c.closed;
-  const diff = closed ? num(c.actual) - theo : null;
+  const cntInput = (key, dn) => `<input type="number" inputmode="numeric" min="0" step="1" id="cl-${key}-${dn}" value="${((key === "f" ? c.floatCnt : c.actualCnt) || {})[dn] || ""}" oninput="recalcCash()" style="max-width:88px;text-align:right" aria-label="${dn}円 ${key === "f" ? "釣銭準備金" : "レジ内実査"} 枚数">`;
   $("main").innerHTML =
     pageHead("レジ締め(日計)", "1日の売上を支払方法別に集計し、レジ現金を照合します",
       `<span class="mnav"><button class="btn sm" onclick="closeNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="closeNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="closeToday()">今日</button>`) +
@@ -1511,19 +1513,56 @@ VIEWS.closing = function(){
       </table></div>
       <div class="hint">支払方法が未設定の売上は現金として集計します。当日の支出: ${yen(totExp)}(${exp.length}件)</div>
     </div>
-    <div class="card"><h2>現金照合</h2>
-      <div class="f-2col" style="max-width:480px">
-        <div class="f-row"><label for="cl-float">釣銭準備金(円)</label><input id="cl-float" type="number" inputmode="numeric" min="0" value="${c.float ?? ""}"></div>
-        <div class="f-row"><label for="cl-actual">レジ内実査額(円)</label><input id="cl-actual" type="number" inputmode="numeric" min="0" value="${c.actual ?? ""}"></div>
+    <div class="card"><h2>現金照合(金種表) <span class="h2-sub">枚数を入れると合計金額が自動計算されます</span></h2>
+      <div class="twrap"><table style="max-width:520px">
+        <tr><th>金種</th><th class="num">釣銭準備金(枚)</th><th class="num">レジ内実査(枚)</th></tr>
+        ${DENOMS.map(dn => `<tr>
+          <td style="white-space:nowrap;font-variant-numeric:tabular-nums">${dn.toLocaleString("ja-JP")}円${dn >= 1000 ? "札" : "玉"}</td>
+          <td class="num">${cntInput("f", dn)}</td>
+          <td class="num">${cntInput("a", dn)}</td>
+        </tr>`).join("")}
+      </table></div>
+      <div class="f-2col" style="max-width:520px;margin-top:14px">
+        <div class="f-row"><label for="cl-float">釣銭準備金 合計(円)</label><input id="cl-float" type="number" inputmode="numeric" min="0" value="${c.float ?? ""}" oninput="updateCashLive()"></div>
+        <div class="f-row"><label for="cl-actual">レジ内実査額 合計(円)</label><input id="cl-actual" type="number" inputmode="numeric" min="0" value="${c.actual ?? ""}" oninput="updateCashLive()"></div>
       </div>
-      <div class="f-row" style="max-width:480px"><label for="cl-memo">メモ(現金での支払い・両替など)</label><input id="cl-memo" value="${esc(c.memo || "")}"></div>
-      <div style="font-size:13.5px;margin-bottom:12px">理論在高(釣銭準備金+現金売上): <strong>${yen(theo)}</strong>${closed ? ` ・ 過不足: <strong style="color:${diff === 0 ? "var(--good)" : "var(--crit)"}">${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${yen(Math.abs(diff))}</strong>` : ""}</div>
+      <div class="f-row" style="max-width:520px"><label for="cl-memo">メモ(現金での支払い・両替など)</label><input id="cl-memo" value="${esc(c.memo || "")}"></div>
+      <div id="cl-live" style="font-size:13.5px;margin-bottom:12px"></div>
       <button class="btn pri" onclick="saveClosing()">締めを保存</button>
-      <div class="hint">現金で支払った経費がある場合は、その分だけ実査額が理論在高より少なくなります。メモに残してください。</div>
+      <div class="hint">金種表を使わず合計欄へ直接入力もできます(枚数を変更すると合計欄は自動で上書き)。現金で支払った経費がある場合は、その分だけ実査額が理論在高より少なくなります。メモに残してください。</div>
     </div>`;
+  updateCashLive();
+};
+/* 金種の枚数から合計金額を計算して合計欄へ反映 */
+window.recalcCash = function(){
+  let f = 0, a = 0;
+  DENOMS.forEach(dn => {
+    f += dn * Math.max(0, num($("cl-f-" + dn).value));
+    a += dn * Math.max(0, num($("cl-a-" + dn).value));
+  });
+  $("cl-float").value = f || "";
+  $("cl-actual").value = a || "";
+  updateCashLive();
+};
+/* 理論在高と過不足を入力のたびに再計算して表示 */
+window.updateCashLive = function(){
+  const el = $("cl-live"); if(!el) return;
+  const theo = num($("cl-float").value) + _cashSales;
+  let diffHtml = "";
+  if($("cl-actual").value !== ""){
+    const diff = num($("cl-actual").value) - theo;
+    diffHtml = ` ・ 過不足: <strong style="color:${diff === 0 ? "var(--good)" : "var(--crit)"}">${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${yen(Math.abs(diff))}</strong>`;
+  }
+  el.innerHTML = `理論在高(釣銭準備金+現金売上 ${yen(_cashSales)}): <strong>${yen(theo)}</strong>${diffHtml}`;
 };
 window.saveClosing = function(){
-  S.closings[V.closeDate] = { float: num($("cl-float").value), actual: num($("cl-actual").value), memo: $("cl-memo").value, closed: true };
+  const cnt = key => {
+    const o = {};
+    DENOMS.forEach(dn => { const n = Math.max(0, num($(`cl-${key}-${dn}`).value)); if(n) o[dn] = n; });
+    return o;
+  };
+  S.closings[V.closeDate] = { float: num($("cl-float").value), actual: num($("cl-actual").value),
+    floatCnt: cnt("f"), actualCnt: cnt("a"), memo: $("cl-memo").value, closed: true };
   save(); toast("レジ締めを保存しました"); render();
 };
 /* ================= follow list (失客・誕生日) ================= */
