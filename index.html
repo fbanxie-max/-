@@ -1732,29 +1732,35 @@ window.wipeAll = function(){
 };
 window.seedSample = function(){
   const m = thisMonth(), pm = addMonths(m, -1), t = todayStr();
-  const s1 = uid(), s2 = uid(), c1 = uid(), i1 = uid(), i2 = uid();
+  const s1 = uid(), s2 = uid(), c1 = uid(), c2 = uid(), i1 = uid(), i2 = uid();
+  if(!num(S.settings.target)) S.settings.target = 800000;
   S.staff.push(
     {id: s1, name:"佐藤 美咲", role:"スタイリスト", payType:"monthly", wage:260000, commission:5},
     {id: s2, name:"田中 健", role:"アシスタント", payType:"hourly", wage:1200, commission:0});
-  S.customers.push({id: c1, name:"山本 花子", kana:"やまもと はなこ", phone:"090-0000-0000", birthday:"1990-04-12",
-    memo:"細毛・カラーはアッシュ系が好み", visits:[{id: uid(), date: pm + "-15", menu:"カラー", staffId: s1, price:9800, note:"8Levアッシュ"}]});
+  S.customers.push(
+    {id: c1, name:"山本 花子", kana:"やまもと はなこ", phone:"090-0000-0000", birthday:`1990-${m.slice(5)}-12`,
+      memo:"細毛・カラーはアッシュ系が好み", visits:[{id: uid(), date: pm + "-15", menu:"カラー", staffId: s1, price:9800, note:"8Levアッシュ"}]},
+    {id: c2, name:"休眠 三郎", kana:"きゅうみん さぶろう", phone:"090-1111-0000", birthday:"",
+      memo:"パーマ常連だったが最近来店なし", visits:[{id: uid(), date: addDays(t, -95), menu:"パーマ", staffId: s1, price:12000, note:""}]});
   S.inv.push(
-    {id: i1, name:"カラー剤 アッシュ8", category:"施術材料", qty:2, unit:"本", minQty:3, price:800},
+    {id: i1, name:"カラー剤 アッシュ8", category:"施術材料", qty:2, unit:"本", minQty:3, price:800, menuCat:"カラー", useQty:1},
     {id: i2, name:"シャンプー(店販)", category:"店販商品", qty:10, unit:"本", minQty:5, price:1600});
   S.tx.push(
-    {id: uid(), type:"income", date: t, category:"カット", amount:4950, memo:"サンプル", staffId: s1},
-    {id: uid(), type:"income", date: t, category:"カラー", amount:9800, memo:"山本様", staffId: s1},
-    {id: uid(), type:"income", date: pm + "-15", category:"カラー", amount:9800, memo:"山本様", staffId: s1},
-    {id: uid(), type:"income", date: pm + "-20", category:"パーマ", amount:12000, memo:"", staffId: s1},
-    {id: uid(), type:"expense", date: pm + "-25", category:"家賃", amount:150000, memo:"", staffId:""},
-    {id: uid(), type:"expense", date: t, category:"材料費", amount:12400, memo:"ディーラー仕入", staffId:""});
+    {id: uid(), type:"income", date: t, category:"カット", amount:4950, memo:"サンプル", staffId: s1, pay:"現金"},
+    {id: uid(), type:"income", date: t, category:"カラー", amount:9800, memo:"山本様", staffId: s1, pay:"カード"},
+    {id: uid(), type:"income", date: pm + "-15", category:"カラー", amount:9800, memo:"山本様", staffId: s1, pay:"現金"},
+    {id: uid(), type:"income", date: pm + "-20", category:"パーマ", amount:12000, memo:"", staffId: s1, pay:"QR決済"},
+    {id: uid(), type:"expense", date: pm + "-25", category:"家賃", amount:150000, memo:"", staffId:"", taxRate:"10"},
+    {id: uid(), type:"expense", date: t, category:"材料費", amount:12400, memo:"ディーラー仕入", staffId:"", taxRate:"10"},
+    {id: uid(), type:"expense", date: t, category:"会議・交際費", amount:860, memo:"お客様用お菓子", staffId:"", taxRate:"8"});
   S.shifts.push(
     {id: uid(), staffId: s1, date: t, start:"09:30", end:"19:00", brk:60, note:""},
     {id: uid(), staffId: s2, date: t, start:"10:00", end:"18:00", brk:60, note:""});
   S.appts.push(
-    {id: uid(), date: t, time:"14:00", name:"山本 花子", customerId: c1, menu:"カット", staffId: s1, price:4950, status:"open", memo:"リタッチ相談"},
-    {id: uid(), date: t, time:"16:30", name:"新規 太郎", menu:"カット", staffId: s2, price:3800, status:"open", memo:""});
+    {id: uid(), date: t, time:"14:00", name:"山本 花子", customerId: c1, menu:"カット", staffId: s1, price:4950, status:"open", dur:60, nominated:"1", memo:"リタッチ相談"},
+    {id: uid(), date: t, time:"16:30", name:"新規 太郎", menu:"カット", staffId: s2, price:3800, status:"open", dur:60, nominated:"", memo:""});
   S.orders.push({id: uid(), date: t, supplier:"ビューティーディーラーA", item:"カラー剤 アッシュ8", qty:6, unit:"本", amount:4800, memo:"", status:"draft", invId: i1});
+  S.tickets.push({id: uid(), customerId: c1, name:"トリートメント5回券", total:5, used:2, price:20000, date: pm + "-15", memo:""});
   save(); toast("サンプルデータを投入しました"); render();
 };
 /* ================= boot ================= */
