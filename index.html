@@ -522,6 +522,7 @@ function breakdownCardsHtml(m){
     </div>
     <div class="card"><h2>支出内訳 <span class="h2-sub">上位5カテゴリ</span></h2>
       ${expE.length ? hbarHtml(expE, s.exp, "var(--expense)") : `<div class="empty">${fmtMonth(m)}の支出記録はありません</div>`}
+      ${s.mat > 0 || s.inc > 0 ? `<div class="hb-foot">材料費 <strong>${yen(s.mat)}</strong>${s.inc > 0 ? ` ・ 材料費率(対売上) <strong>${Math.round(s.mat / s.inc * 100)}%</strong>` : ""}</div>` : ""}
     </div>
   </div>`;
 }
@@ -540,6 +541,7 @@ function calcPay(st, m){
 const NAV = [
   {sec:"ホーム"},
   {id:"dash", label:"ダッシュボード"},
+  {id:"reports", label:"レポート一覧"},
   {sec:"日々の業務"},
   {id:"appts", label:"予約管理"},
   {id:"money", label:"収支管理"},
@@ -561,7 +563,7 @@ const NAV = [
 ];
 let cur = "dash";
 const V = {}; // view state
-V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth(); V.reportMonth = thisMonth();
+V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth(); V.reportMonth = thisMonth(); V.reportsMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
 V.closeDate = todayStr(); V.lostDays = 60;
@@ -638,7 +640,7 @@ VIEWS.dash = function(){
     heroHtml() +
     `<div class="tiles">
       <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件${apptsToday.length ? ` ・ 予約あと${apptsToday.length}件` : ""}</div></div>
-      <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div></div>
       <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
       <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
@@ -771,7 +773,7 @@ VIEWS.report = function(){
       `<button class="btn" onclick="go('dash')">‹ ダッシュボードへ</button>${monthNav(m, "reportNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button><button class="btn" onclick="mailReport()">メールで送る</button><button class="btn" onclick="copyReport()">本文をコピー</button>`) +
     `<div class="tiles">
       <div class="tile"><div class="t-label">売上</div><div class="t-val">${yen(s.inc)}</div><div class="t-note">${mom}${yoy}</div></div>
-      <div class="tile"><div class="t-label">支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}</div></div>
+      <div class="tile"><div class="t-label">支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
       <div class="tile"><div class="t-label">利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div></div>
       <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
       <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
@@ -827,6 +829,80 @@ function fallbackCopy(text){
   ta.remove();
   toast(ok ? "本文をコピーしました" : "コピーできませんでした。お手数ですが手動で選択してください");
 }
+/* ================= reports list (日報・月報一覧) ================= */
+window.reportsNav = d => { V.reportsMonth = addMonths(V.reportsMonth, d); render(); };
+window.openDayClose = d => { V.closeDate = d; go("closing"); };
+window.openMonthReport = m => { V.reportMonth = m; go("report"); };
+/* 指定月の日別サマリー(取引かレジ締めがある日のみ) */
+function dailyRows(m){
+  const rows = [];
+  for(let i = 1; i <= daysInMonth(m); i++){
+    const d = m + "-" + String(i).padStart(2, "0");
+    const list = S.tx.filter(t => t.date === d);
+    const c = S.closings[d];
+    if(!list.length && !c) continue;
+    const incL = list.filter(t => t.type === "income");
+    const inc = incL.reduce((a,t) => a + num(t.amount), 0);
+    const exp = list.filter(t => t.type === "expense").reduce((a,t) => a + num(t.amount), 0);
+    const cash = incL.filter(t => !t.pay || t.pay === "現金").reduce((a,t) => a + num(t.amount), 0);
+    const diff = c && c.closed ? num(c.actual) - (num(c.float) + cash) : null;
+    rows.push({ d, inc, count: salesCount(incL), exp, closed: !!(c && c.closed), diff });
+  }
+  return rows;
+}
+VIEWS.reports = function(){
+  const m = V.reportsMonth, tday = todayStr();
+  const days = dailyRows(m);
+  const totInc = days.reduce((a,x) => a + x.inc, 0), totExp = days.reduce((a,x) => a + x.exp, 0), totCount = days.reduce((a,x) => a + x.count, 0);
+  const target = num(S.settings.target);
+  /* 月報: 直近12ヶ月のうち取引がある月(当月は常に表示) */
+  const months = lastMonths(12).filter(mm => mm === thisMonth() || txInMonth(mm).length).reverse();
+  $("main").innerHTML =
+    pageHead("レポート一覧", "日報と月報をまとめて確認できます。行をクリックすると詳細へ移動します") +
+    `<div class="card"><h2>日報一覧 ${monthNav(m, "reportsNav")} <button class="btn sm" onclick="exportDailyCsv()">CSV出力</button></h2>
+      <div class="twrap">${days.length ? `<table>
+        <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th class="num">客単価</th><th class="num">支出</th><th class="num">差引</th><th>レジ締め</th></tr>
+        ${days.map(x => `<tr class="rowlink" onclick="openDayClose('${x.d}')"${x.d === tday ? ' style="background:var(--accent-soft)"' : ""}>
+          <td style="white-space:nowrap;font-weight:600">${fmtDate(x.d)}</td>
+          <td class="num">${yen(x.inc)}</td>
+          <td class="num">${x.count}件</td>
+          <td class="num">${x.count ? yen(Math.round(x.inc / x.count)) : "—"}</td>
+          <td class="num">${yen(x.exp)}</td>
+          <td class="num" style="color:${x.inc - x.exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(x.inc - x.exp)}</td>
+          <td>${x.closed
+            ? `<span class="chip good">締め済</span>${x.diff !== 0 ? ` <span style="color:var(--crit);font-size:12px">${x.diff > 0 ? "+" : "−"}${yen(Math.abs(x.diff))}</span>` : ""}`
+            : (x.count ? '<span class="chip warn">未締め</span>' : "")}</td>
+        </tr>`).join("")}
+        <tr class="total"><td>合計</td><td class="num">${yen(totInc)}</td><td class="num">${totCount}件</td><td class="num">${totCount ? yen(Math.round(totInc / totCount)) : "—"}</td><td class="num">${yen(totExp)}</td><td class="num">${yen(totInc - totExp)}</td><td></td></tr>
+      </table>` : `<div class="empty">${fmtMonth(m)}の記録はまだありません</div>`}</div>
+      <div class="hint">行をクリックするとその日のレジ締め(日計)が開きます。過不足がある日は金額を赤字で表示します。</div>
+    </div>
+    <div class="card"><h2>月報一覧 <span class="h2-sub">直近12ヶ月</span></h2>
+      <div class="twrap">${months.length ? `<table>
+        <tr><th>月</th><th class="num">売上</th><th class="num">支出</th><th class="num">利益</th><th class="num">客数</th><th class="num">客単価</th><th class="num">材料費(率)</th>${target > 0 ? '<th class="num">目標達成</th>' : ""}<th></th></tr>
+        ${months.map(mm => {
+          const s = monthSummary(mm);
+          return `<tr class="rowlink" onclick="openMonthReport('${mm}')"${mm === thisMonth() ? ' style="background:var(--accent-soft)"' : ""}>
+            <td style="white-space:nowrap;font-weight:600">${fmtMonth(mm)}${mm === thisMonth() ? ' <span class="chip info">今月</span>' : ""}</td>
+            <td class="num">${yen(s.inc)}</td>
+            <td class="num">${yen(s.exp)}</td>
+            <td class="num" style="color:${s.profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(s.profit)}</td>
+            <td class="num">${s.count}件</td>
+            <td class="num">${yen(s.avg)}</td>
+            <td class="num">${yen(s.mat)}${s.inc > 0 ? `<span style="color:var(--muted);font-size:12px">(${Math.round(s.mat / s.inc * 100)}%)</span>` : ""}</td>
+            ${target > 0 ? `<td class="num">${Math.round(s.inc / target * 100)}%</td>` : ""}
+            <td><button class="btn sm ghost" onclick="event.stopPropagation();openMonthReport('${mm}')">月次レポート ›</button></td>
+          </tr>`; }).join("")}</table>` : `<div class="empty">まだ記録がありません</div>`}</div>
+      <div class="hint">行をクリックするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。</div>
+    </div>`;
+};
+window.exportDailyCsv = function(){
+  const m = V.reportsMonth;
+  const rows = [["日付","売上","件数","客単価","支出","差引","レジ締め","過不足"]];
+  dailyRows(m).forEach(x => rows.push([x.d, x.inc, x.count, x.count ? Math.round(x.inc / x.count) : "", x.exp, x.inc - x.exp,
+    x.closed ? "締め済" : "未締め", x.closed ? x.diff : ""]));
+  dlCSV(`日報_${m}.csv`, rows);
+};
 /* ================= money (収支) ================= */
 window.moneyNav = d => { V.moneyMonth = addMonths(V.moneyMonth, d); render(); };
 VIEWS.money = function(){
@@ -1254,9 +1330,16 @@ window.bookOrder = function(id){
 VIEWS.inv = function(){
   const list = [...S.inv].sort((a,b) => (a.category || "").localeCompare(b.category || "") || a.name.localeCompare(b.name));
   const lowCount = list.filter(i => num(i.qty) <= num(i.minQty) && num(i.minQty) > 0).length;
+  const catVal = {};
+  let totVal = 0;
+  list.forEach(i => { const v = num(i.qty) * num(i.price); totVal += v; catVal[i.category || "未分類"] = (catVal[i.category || "未分類"] || 0) + v; });
   $("main").innerHTML =
     pageHead("在庫管理", lowCount ? `<span style="color:var(--crit);font-weight:700">${lowCount}品目が在庫不足です</span>` : "薬剤・店販商品・備品の在庫を管理します",
       `<button class="btn pri" onclick="addInv()">+ 品目を追加</button>`) +
+    (list.length ? `<div class="card" style="display:flex;align-items:baseline;gap:8px 20px;flex-wrap:wrap">
+      <span>在庫評価額(在庫数×参考単価) <strong style="font-size:17px">${yen(totVal)}</strong></span>
+      ${INV_CATS.filter(cat => catVal[cat]).map(cat => `<span style="font-size:12.5px;color:var(--ink2)">${esc(cat)} <strong>${yen(catVal[cat])}</strong></span>`).join("")}
+    </div>` : "") +
     `<div class="card"><div class="twrap">${list.length ? `<table>
       <tr><th>品名</th><th>カテゴリ</th><th class="num">在庫数</th><th></th><th class="num">最低在庫</th><th class="num">参考単価</th><th></th></tr>
       ${list.map(i => {
