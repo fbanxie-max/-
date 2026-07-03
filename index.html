@@ -678,22 +678,18 @@ function fmtAxis(n){
   return n.toLocaleString("ja-JP");
 }
 let _chartData = [];
-function monthlyChartHtml(base, n){
-  const months = lastMonths(n || 6, base);
-  _chartData = months.map(m => {
-    const t = txInMonth(m);
-    return { m, inc: sumTx(t, "income"), exp: sumTx(t, "expense") };
-  });
+/* 2本組の棒グラフSVG(月別収支・前年対比で共用)。items: [{label, a, b}] */
+function groupedBarsSvg(items, colorA, colorB, ariaLabel){
   const W = 660, H = 230, padL = 58, padR = 10, padT = 10, padB = 26;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const rawMax = Math.max(1, ...(_chartData.flatMap(d => [d.inc, d.exp])));
+  const rawMax = Math.max(1, ...items.flatMap(d => [d.a, d.b]));
   const STEPS = 4;
   const unit = Math.pow(10, Math.floor(Math.log10(rawMax / STEPS)));
   let step = Math.ceil(rawMax / STEPS / unit) * unit;
   for(const nice of [1, 2, 2.5, 5, 10]){ if(nice * unit * STEPS >= rawMax){ step = nice * unit; break; } }
   const yMax = step * STEPS;
   const y = v => padT + plotH - (v / yMax) * plotH;
-  const groupW = plotW / months.length;
+  const groupW = plotW / items.length;
   const barW = Math.min(26, (groupW - 18) / 2);
   let grid = "", bars = "", hits = "", labels = "";
   for(let i = 1; i <= STEPS; i++){
@@ -701,22 +697,31 @@ function monthlyChartHtml(base, n){
     grid += `<line x1="${padL}" x2="${W - padR}" y1="${gy}" y2="${gy}" stroke="var(--grid)" stroke-width="1"/>`;
     labels += `<text x="${padL - 8}" y="${gy + 4}" text-anchor="end" font-size="10.5" fill="var(--muted)">${fmtAxis(step * i)}</text>`;
   }
-  _chartData.forEach((d, i) => {
+  items.forEach((d, i) => {
     const cx = padL + groupW * i + groupW / 2;
     const x1 = cx - barW - 1, x2 = cx + 1; // 2px gap between the pair
-    bars += barPath(x1, y(d.inc), barW, padT + plotH, "var(--income)");
-    bars += barPath(x2, y(d.exp), barW, padT + plotH, "var(--expense)");
-    labels += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--muted)">${+d.m.slice(5)}月</text>`;
+    bars += barPath(x1, y(d.a), barW, padT + plotH, colorA);
+    bars += barPath(x2, y(d.b), barW, padT + plotH, colorB);
+    labels += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--muted)">${d.label}</text>`;
     hits += `<rect data-ci="${i}" x="${padL + groupW * i}" y="${padT}" width="${groupW}" height="${plotH}" fill="transparent" class="c-hit"/>`;
   });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${ariaLabel}">
+    ${grid}<line x1="${padL}" x2="${W - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="var(--axis)" stroke-width="1"/>
+    ${bars}${labels}${hits}</svg>`;
+}
+function monthlyChartHtml(base, n){
+  const months = lastMonths(n || 6, base);
+  _chartData = months.map(m => {
+    const t = txInMonth(m);
+    return { m, inc: sumTx(t, "income"), exp: sumTx(t, "expense") };
+  });
+  const items = _chartData.map(d => ({ label: +d.m.slice(5) + "月", a: d.inc, b: d.exp }));
   const table = `<div class="twrap" style="margin-top:10px"><table>
     <tr><th>月</th><th class="num">収入</th><th class="num">支出</th><th class="num">差引</th></tr>
     ${_chartData.map(d => `<tr><td>${fmtMonth(d.m)}</td><td class="num">${yen(d.inc)}</td><td class="num">${yen(d.exp)}</td><td class="num" style="color:${d.inc - d.exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(d.inc - d.exp)}</td></tr>`).join("")}
   </table></div>`;
   return `<div class="legend"><span><span class="sw" style="background:var(--income)"></span>収入</span><span><span class="sw" style="background:var(--expense)"></span>支出</span></div>
-    <div class="chartwrap"><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="月別の収入と支出の棒グラフ。詳細は下の表を参照。">
-    ${grid}<line x1="${padL}" x2="${W - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="var(--axis)" stroke-width="1"/>
-    ${bars}${labels}${hits}</svg><div id="ctip"></div></div>${table}`;
+    <div class="chartwrap">${groupedBarsSvg(items, "var(--income)", "var(--expense)", "月別の収入と支出の棒グラフ。詳細は下の表を参照。")}<div id="ctip"></div></div>${table}`;
 }
 function barPath(x, top, w, bottom, fill){
   const h = bottom - top;
@@ -730,7 +735,7 @@ function attachChartTips(){
   document.querySelectorAll(".c-hit").forEach(r => {
     r.addEventListener("mousemove", ev => {
       const d = _chartData[+r.dataset.ci];
-      tip.innerHTML = `<strong>${fmtMonth(d.m)}</strong><br>収入 ${yen(d.inc)}<br>支出 ${yen(d.exp)}<br>差引 ${yen(d.inc - d.exp)}`;
+      tip.innerHTML = d.tip || `<strong>${fmtMonth(d.m)}</strong><br>収入 ${yen(d.inc)}<br>支出 ${yen(d.exp)}<br>差引 ${yen(d.inc - d.exp)}`;
       tip.style.display = "block";
       const wrap = r.closest(".chartwrap").getBoundingClientRect();
       let x = ev.clientX - wrap.left + 14, ty = ev.clientY - wrap.top - 10;
@@ -894,7 +899,9 @@ VIEWS.reports = function(){
             <td><button class="btn sm ghost" onclick="event.stopPropagation();openMonthReport('${mm}')">月次レポート ›</button></td>
           </tr>`; }).join("")}</table>` : `<div class="empty">まだ記録がありません</div>`}</div>
       <div class="hint">行をクリックするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。</div>
-    </div>`;
+    </div>` +
+    yoyCardHtml(m.slice(0, 4));
+  attachChartTips();
 };
 window.exportDailyCsv = function(){
   const m = V.reportsMonth;
@@ -903,6 +910,33 @@ window.exportDailyCsv = function(){
     x.closed ? "締め済" : "未締め", x.closed ? x.diff : ""]));
   dlCSV(`日報_${m}.csv`, rows);
 };
+/* 売上の前年対比カード(1〜12月の月別売上を前年と並べる) */
+function yoyCardHtml(yr){
+  const prevYr = String(+yr - 1);
+  const cur = [], prev = [];
+  for(let i = 1; i <= 12; i++){
+    const mm = String(i).padStart(2, "0");
+    cur.push(sumTx(txInMonth(`${yr}-${mm}`), "income"));
+    prev.push(sumTx(txInMonth(`${prevYr}-${mm}`), "income"));
+  }
+  const hasPrev = prev.some(v => v > 0), hasCur = cur.some(v => v > 0);
+  const head = `<h2>売上の前年対比 <span class="h2-sub">${prevYr}年 vs ${yr}年(月別売上)</span></h2>`;
+  if(!hasPrev && !hasCur) return `<div class="card">${head}<div class="empty">まだ売上データがありません</div></div>`;
+  const items = cur.map((v, i) => ({ label: (i + 1) + "月", a: prev[i], b: v }));
+  const yoyPct = (p, c2) => p > 0 ? `<span style="color:${c2 >= p ? "var(--good)" : "var(--crit)"}">${(c2 >= p ? "+" : "−") + Math.abs(Math.round((c2 - p) / p * 100))}%</span>` : "—";
+  _chartData = items.map((d, i) => ({ tip: `<strong>${i + 1}月</strong><br>${prevYr}年 ${yen(d.a)}<br>${yr}年 ${yen(d.b)}<br>${d.a > 0 ? `増減 ${(d.b >= d.a ? "+" : "−") + Math.abs(Math.round((d.b - d.a) / d.a * 100))}%` : "前年実績なし"}` }));
+  const totPrev = prev.reduce((a,v) => a + v, 0), totCur = cur.reduce((a,v) => a + v, 0);
+  const table = `<div class="twrap" style="margin-top:10px"><table>
+    <tr><th>月</th><th class="num">${prevYr}年</th><th class="num">${yr}年</th><th class="num">増減率</th></tr>
+    ${items.map((d, i) => (d.a || d.b) ? `<tr><td>${i + 1}月</td><td class="num">${yen(d.a)}</td><td class="num">${yen(d.b)}</td><td class="num">${yoyPct(d.a, d.b)}</td></tr>` : "").join("")}
+    <tr class="total"><td>年計</td><td class="num">${yen(totPrev)}</td><td class="num">${yen(totCur)}</td><td class="num">${yoyPct(totPrev, totCur)}</td></tr>
+  </table></div>`;
+  return `<div class="card">${head}
+    <div class="legend"><span><span class="sw" style="background:var(--axis)"></span>${prevYr}年</span><span><span class="sw" style="background:var(--income)"></span>${yr}年</span></div>
+    <div class="chartwrap">${groupedBarsSvg(items, "var(--axis)", "var(--income)", "前年と今年の月別売上を並べた棒グラフ。詳細は下の表を参照。")}<div id="ctip"></div></div>
+    ${hasPrev ? "" : `<div class="hint">前年(${prevYr}年)の実績データがまだありません。2年分のデータが貯まると増減率も表示されます。</div>`}
+    ${table}</div>`;
+}
 /* ================= money (収支) ================= */
 window.moneyNav = d => { V.moneyMonth = addMonths(V.moneyMonth, d); render(); };
 VIEWS.money = function(){
