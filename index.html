@@ -187,6 +187,22 @@ td.today-col{background:var(--accent-soft)}
 .visit-item .v-body{font-size:13px;color:var(--ink2)}
 .alertline{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--line)}
 .alertline:last-child{border-bottom:0}
+/* ---- hero (目標達成カード) ---- */
+.hero .hr-label{font-size:12.5px;color:var(--muted)}
+.hero .hr-val{font-size:clamp(40px,5.5vw,48px);font-weight:700;letter-spacing:.01em;line-height:1.15;font-variant-numeric:tabular-nums}
+.meter{height:10px;border-radius:999px;background:var(--info-chip);overflow:hidden;margin:10px 0 8px}
+.meter .m-fill{height:100%;border-radius:999px;background:var(--income)}
+.hr-sub{display:flex;gap:6px 20px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
+.hr-sub strong{font-variant-numeric:tabular-nums}
+/* ---- horizontal bars ---- */
+.hbar{display:flex;flex-direction:column;gap:9px}
+.hb-top{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;margin-bottom:2px}
+.hb-label{color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hb-val{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+.hb-val .hb-pct{color:var(--muted);font-weight:400;margin-left:4px}
+.hb-track{height:8px;border-radius:999px;background:var(--surface2);overflow:hidden}
+.hb-fill{height:100%;border-radius:999px}
+.hb-foot{font-size:12px;color:var(--ink2);margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
 /* ---- mobile ---- */
 @media (max-width:760px){
   #app{flex-direction:column}
@@ -195,7 +211,8 @@ td.today-col{background:var(--accent-soft)}
     flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;
     padding:8px 10px;border-right:0;border-bottom:1px solid var(--line);gap:4px;
   }
-  .brand{border:0;margin:0;padding:0 10px 0 4px}
+  .brand{border:0;margin:0;padding:0 10px 0 4px;flex-shrink:0}
+  .brand .b-name{white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
   .brand .b-sub{display:none}
   .navbtn{width:auto;white-space:nowrap;padding:6px 10px}
   .nav-sec{display:none}
@@ -203,9 +220,23 @@ td.today-col{background:var(--accent-soft)}
   .f-2col{grid-template-columns:1fr}
 }
 @media print{
+  /* ダークテーマ利用中でも印刷は常にライトテーマ(全トークンを強制上書き) */
+  :root,:root[data-theme="light"],:root[data-theme="dark"]{
+    --bg:#ffffff; --surface:#ffffff; --surface2:#f2f1ec;
+    --ink:#1a1816; --ink2:#55524d; --muted:#8a877f;
+    --line:#e5e3dc; --line2:#d8d6cd;
+    --accent:#9c4a66; --accent-hover:#833b54; --accent-ink:#ffffff; --accent-soft:#f6e9ee;
+    --income:#2a78d6; --expense:#1baf7a;
+    --good:#006300; --good-chip:#e3f2e3; --warn:#8a5a00; --warn-chip:#faf0d8;
+    --crit:#b03030; --crit-chip:#f9e4e4; --info:#1c5cab; --info-chip:#e2edfb;
+    --grid:#e1e0d9; --axis:#c3c2b7;
+    --shadow:none;
+  }
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   #sidebar,.ph-actions,.btn,#toast{display:none !important}
-  body{background:#fff}
-  .card{box-shadow:none;break-inside:avoid}
+  body{background:#fff;color:var(--ink)}
+  #main{max-width:none;padding:0}
+  .card,.tile{box-shadow:none;break-inside:avoid}
 }
 </style>
 </head>
@@ -221,7 +252,7 @@ td.today-col{background:var(--accent-soft)}
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-v1";
 const DEFAULTS = {
-  settings: { name: "マイサロン" },
+  settings: { name: "マイサロン", target: 0 }, // target: 月間売上目標(円)。旧バックアップにはこのキーが無いため利用側は num()>0 で判定する
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
   tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
@@ -371,6 +402,79 @@ function dlCSV(name, rows){
 /* ================= aggregation ================= */
 const txInMonth = m => S.tx.filter(t => t.date && t.date.startsWith(m));
 const sumTx = (list, type) => list.filter(t => t.type === type).reduce((a,t) => a + num(t.amount), 0);
+function daysInMonth(m){ const [y,mo] = m.split("-").map(Number); return new Date(y, mo, 0).getDate(); }
+function monthSummary(m){
+  const list = txInMonth(m);
+  const incList = list.filter(t => t.type === "income");
+  const inc = incList.reduce((a,t) => a + num(t.amount), 0);
+  const exp = sumTx(list, "expense");
+  const mat = list.filter(t => t.type === "expense" && t.category === "材料費").reduce((a,t) => a + num(t.amount), 0);
+  const retail = incList.filter(t => t.category === "店販(商品売上)").reduce((a,t) => a + num(t.amount), 0);
+  const count = incList.length;
+  return { inc, exp, profit: inc - exp, mat, retail, count, avg: count ? Math.round(inc / count) : 0 };
+}
+/* 顧客カルテから当月来店客の新規/再来を判定(顧客単位。全来店のうち最古の日付が当月なら新規) */
+function visitStats(m){
+  let nw = 0, rep = 0;
+  S.customers.forEach(c => {
+    const vs = c.visits || [];
+    if(!vs.some(v => v.date && v.date.startsWith(m))) return;
+    const first = vs.reduce((a,v) => (v.date && (!a || v.date < a)) ? v.date : a, "");
+    if(first.startsWith(m)) nw++; else rep++;
+  });
+  return { nw, rep };
+}
+function groupSum(list, keyFn){
+  const g = {};
+  list.forEach(t => { const k = keyFn(t); g[k] = (g[k] || 0) + num(t.amount); });
+  return Object.entries(g).sort((a,b) => b[1] - a[1]);
+}
+function topN(entries, n){
+  if(entries.length <= n + 1) return entries;
+  const rest = entries.slice(n).reduce((a,e) => a + e[1], 0);
+  return [...entries.slice(0, n), ["その他", rest]];
+}
+/* 収入を担当者別に集計。登録済みスタッフ以外のIDは退職スタッフとしてまとめる */
+function staffSalesEntries(m){
+  const g = {};
+  txInMonth(m).filter(t => t.type === "income").forEach(t => {
+    const k = !t.staffId ? "担当なし" : (S.staff.some(s => s.id === t.staffId) ? staffName(t.staffId) : "退職スタッフ");
+    g[k] = (g[k] || 0) + num(t.amount);
+  });
+  return Object.entries(g).sort((a,b) => b[1] - a[1]);
+}
+function hbarHtml(entries, total, color){
+  const max = Math.max(1, ...entries.map(e => e[1]));
+  return `<div class="hbar">` + entries.map(([label, v]) => {
+    const pct = total > 0 ? Math.round(v / total * 100) : 0;
+    return `<div><div class="hb-top"><span class="hb-label">${esc(label)}</span><span class="hb-val">${yen(v)}<span class="hb-pct">${pct}%</span></span></div>
+      <div class="hb-track"><div class="hb-fill" style="width:${Math.min(100, v / max * 100).toFixed(1)}%;background:${color}"></div></div></div>`;
+  }).join("") + `</div>`;
+}
+/* スタッフ別売上・メニュー別構成・支出内訳の3カード(ダッシュボードと月次レポートで共用) */
+function breakdownCardsHtml(m){
+  const s = monthSummary(m);
+  const staffE = staffSalesEntries(m);
+  const menuE = topN(groupSum(txInMonth(m).filter(t => t.type === "income"), t => t.category || "未分類"), 7);
+  const expE = topN(groupSum(txInMonth(m).filter(t => t.type === "expense"), t => t.category || "未分類"), 5);
+  const vs = visitStats(m);
+  const seen = vs.nw + vs.rep;
+  const foot = s.inc > 0
+    ? `<div class="hb-foot">店販比率 <strong>${Math.round(s.retail / s.inc * 100)}%</strong> ・ リピート率 <strong>${seen ? Math.round(vs.rep / seen * 100) + "%" : "—(カルテ記録なし)"}</strong>${seen ? `(カルテ 新規${vs.nw}・再来${vs.rep})` : ""}</div>`
+    : "";
+  return `<div class="grid2" style="margin-bottom:16px">
+    <div class="card"><h2>スタッフ別売上 <span class="h2-sub">${fmtMonth(m)}</span></h2>
+      ${staffE.length ? hbarHtml(staffE, s.inc, "var(--income)") : `<div class="empty">${fmtMonth(m)}の売上記録はありません</div>`}
+    </div>
+    <div class="card"><h2>メニュー別構成 <span class="h2-sub">上位7カテゴリ</span></h2>
+      ${menuE.length ? hbarHtml(menuE, s.inc, "var(--accent)") : `<div class="empty">${fmtMonth(m)}の売上記録はありません</div>`}
+      ${foot}
+    </div>
+    <div class="card"><h2>支出内訳 <span class="h2-sub">上位5カテゴリ</span></h2>
+      ${expE.length ? hbarHtml(expE, s.exp, "var(--expense)") : `<div class="empty">${fmtMonth(m)}の支出記録はありません</div>`}
+    </div>
+  </div>`;
+}
 function staffMonthHours(staffId, m){ return S.shifts.filter(s => s.staffId === staffId && s.date.startsWith(m)).reduce((a,s) => a + shiftHours(s), 0); }
 function staffMonthSales(staffId, m){ return txInMonth(m).filter(t => t.type === "income" && t.staffId === staffId).reduce((a,t) => a + num(t.amount), 0); }
 function calcPay(st, m){
@@ -404,7 +508,7 @@ const NAV = [
 ];
 let cur = "dash";
 const V = {}; // view state
-V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth();
+V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth(); V.reportMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.orderFilter = "all"; V.custSel = null; V.custQ = "";
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
@@ -425,35 +529,62 @@ function monthNav(month, fnName){
 }
 const VIEWS = {};
 /* ================= dashboard ================= */
+/* 目標達成ヒーローカード(当月専用) */
+function heroHtml(){
+  const m = thisMonth(), tday = todayStr();
+  const s = monthSummary(m);
+  const target = num(S.settings.target);
+  const day = +tday.slice(8), dim = daysInMonth(m);
+  const forecast = day >= 3 ? Math.round(s.inc / day * dim) : null;
+  const pm = addMonths(m, -1);
+  const pmCut = pm + "-" + String(Math.min(day, daysInMonth(pm))).padStart(2, "0");
+  const pmInc = S.tx.filter(t => t.type === "income" && t.date && t.date.startsWith(pm) && t.date <= pmCut)
+    .reduce((a,t) => a + num(t.amount), 0);
+  const pct = target > 0 ? s.inc / target * 100 : 0;
+  const meter = target > 0
+    ? `<div class="meter" role="img" aria-label="目標達成率 ${Math.round(pct)}%"><div class="m-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div>`
+    : `<div class="hint" style="margin:8px 0 6px">月間売上目標が未設定です。設定画面で登録すると達成メーターが表示されます。 <button class="btn sm" onclick="go('settings')">設定へ</button></div>`;
+  const subs = [];
+  if(target > 0){
+    subs.push(`目標 <strong>${yen(target)}</strong>`);
+    subs.push(`達成 <strong>${Math.round(pct)}%</strong>`);
+  }
+  subs.push(`着地見込み <strong>${forecast === null ? "算出中(3日経過後に表示)" : yen(forecast)}</strong>`);
+  subs.push(`前月同日比 <strong${pmInc > 0 ? ` style="color:${s.inc >= pmInc ? "var(--good)" : "var(--crit)"}"` : ""}>${pmInc > 0 ? (s.inc >= pmInc ? "+" : "−") + Math.abs(Math.round((s.inc - pmInc) / pmInc * 100)) + "%" : "前月実績なし"}</strong>`);
+  return `<div class="card hero">
+    <div class="hr-label">${fmtMonth(m)}の売上</div>
+    <div class="hr-val">${yen(s.inc)}</div>
+    ${meter}
+    <div class="hr-sub">${subs.map(x => `<span>${x}</span>`).join("")}</div>
+  </div>`;
+}
 VIEWS.dash = function(){
   const m = thisMonth(), tday = todayStr();
-  const mtx = txInMonth(m);
-  const incM = sumTx(mtx, "income"), expM = sumTx(mtx, "expense");
+  const s = monthSummary(m);
   const incToday = S.tx.filter(t => t.date === tday && t.type === "income").reduce((a,t) => a + num(t.amount), 0);
-  const profit = incM - expM;
   const custToday = S.tx.filter(t => t.date === tday && t.type === "income").length;
+  const vs = visitStats(m);
   /* alerts */
   const low = S.inv.filter(i => num(i.qty) <= num(i.minQty) && num(i.minQty) > 0);
   const pendingOrders = S.orders.filter(o => o.status !== "done");
   const apptsToday = S.appts.filter(a => a.date === tday && a.status === "open").sort((a,b) => a.time.localeCompare(b.time));
-  const shiftsToday = S.shifts.filter(s => s.date === tday);
+  const shiftsToday = S.shifts.filter(s2 => s2.date === tday);
   const alerts = [];
   low.forEach(i => alerts.push(`<div class="alertline"><span class="chip crit">在庫不足</span>${esc(i.name)}(残り ${i.qty}${esc(i.unit || "")} / 最低 ${i.minQty})</div>`));
   pendingOrders.filter(o => o.status === "draft").forEach(o => alerts.push(`<div class="alertline"><span class="chip warn">未発注</span>${esc(o.item)}(${esc(o.supplier)})</div>`));
   const hasData = S.tx.length > 0;
   $("main").innerHTML =
     pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
-      `<button class="btn pri" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button>`) +
+      `<button class="btn pri" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button><button class="btn" onclick="openReport()">月次レポート</button>`) +
+    heroHtml() +
     `<div class="tiles">
-      <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件</div></div>
-      <div class="tile"><div class="t-label">${fmtMonth(m)}の売上</div><div class="t-val">${yen(incM)}</div></div>
-      <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(expM)}</div></div>
-      <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${profit >= 0 ? "t-good" : "t-crit"}">${yen(profit)}</div></div>
+      <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件${apptsToday.length ? ` ・ 予約あと${apptsToday.length}件` : ""}</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div></div>
+      <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
+      <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
     </div>
-    <div class="card"><h2>月別収支 <span class="h2-sub">直近6ヶ月</span></h2>
-      ${hasData ? monthlyChartHtml() : `<div class="empty">まだ収支データがありません。「+ 売上を記録」から始めるか、設定画面でサンプルデータを投入してお試しください。</div>`}
-    </div>
-    <div class="grid2">
+    <div class="grid2" style="margin-bottom:16px">
       <div class="card"><h2>今日の予約 <span class="h2-sub">${apptsToday.length}件</span></h2>
         ${apptsToday.length ? apptsToday.map(a =>
           `<div class="alertline"><strong style="font-variant-numeric:tabular-nums">${esc(a.time)}</strong> ${esc(a.name)} <span class="chip mut">${esc(a.menu || "")}</span> <span style="color:var(--muted);font-size:12px">${esc(staffName(a.staffId))}</span></div>`).join("")
@@ -461,19 +592,23 @@ VIEWS.dash = function(){
         <div style="margin-top:10px"><button class="btn sm" onclick="go('appts')">予約管理へ ›</button></div>
       </div>
       <div class="card"><h2>今日のシフト</h2>
-        ${shiftsToday.length ? shiftsToday.map(s =>
-          `<div class="alertline">${esc(staffName(s.staffId))} <strong style="font-variant-numeric:tabular-nums">${esc(s.start)}–${esc(s.end)}</strong></div>`).join("")
+        ${shiftsToday.length ? shiftsToday.map(s2 =>
+          `<div class="alertline">${esc(staffName(s2.staffId))} <strong style="font-variant-numeric:tabular-nums">${esc(s2.start)}–${esc(s2.end)}</strong></div>`).join("")
           : `<div class="empty">今日のシフト登録はありません</div>`}
         <div style="margin-top:10px"><button class="btn sm" onclick="go('shifts')">シフト管理へ ›</button></div>
       </div>
       <div class="card"><h2>アラート</h2>
         ${alerts.length ? alerts.join("") : `<div class="empty">対応が必要な項目はありません</div>`}
       </div>
-    </div>`;
+    </div>
+    <div class="card"><h2>月別収支 <span class="h2-sub">直近6ヶ月</span></h2>
+      ${hasData ? monthlyChartHtml() : `<div class="empty">まだ収支データがありません。「+ 売上を記録」から始めるか、設定画面でサンプルデータを投入してお試しください。</div>`}
+    </div>` +
+    breakdownCardsHtml(m);
   attachChartTips();
 };
-function lastMonths(n){
-  const arr = []; let m = thisMonth();
+function lastMonths(n, base){
+  const arr = []; const m = base || thisMonth();
   for(let i = n-1; i >= 0; i--) arr.push(addMonths(m, -i));
   return arr;
 }
@@ -482,8 +617,8 @@ function fmtAxis(n){
   return n.toLocaleString("ja-JP");
 }
 let _chartData = [];
-function monthlyChartHtml(){
-  const months = lastMonths(6);
+function monthlyChartHtml(base){
+  const months = lastMonths(6, base);
   _chartData = months.map(m => {
     const t = txInMonth(m);
     return { m, inc: sumTx(t, "income"), exp: sumTx(t, "expense") };
@@ -543,6 +678,91 @@ function attachChartTips(){
     });
     r.addEventListener("mouseleave", () => { tip.style.display = "none"; });
   });
+}
+/* ================= monthly report (ナビ非掲載) ================= */
+window.openReport = function(){ V.reportMonth = thisMonth(); go("report"); };
+window.reportNav = d => { V.reportMonth = addMonths(V.reportMonth, d); render(); };
+VIEWS.report = function(){
+  const m = V.reportMonth, isCur = m === thisMonth();
+  const s = monthSummary(m);
+  const sPrev = monthSummary(addMonths(m, -1));
+  const vs = visitStats(m);
+  const mom = sPrev.inc > 0
+    ? `前月比 <span style="color:${s.inc >= sPrev.inc ? "var(--good)" : "var(--crit)"}">${(s.inc >= sPrev.inc ? "+" : "−") + Math.abs(Math.round((s.inc - sPrev.inc) / sPrev.inc * 100))}%</span>`
+    : "前月実績なし";
+  let outlook = "";
+  if(isCur){
+    const day = +todayStr().slice(8), dim = daysInMonth(m);
+    const forecast = day >= 3 ? Math.round(s.inc / day * dim) : null;
+    const target = num(S.settings.target);
+    outlook = `<div class="card"><h2>今月の見通し <span class="h2-sub">${day}日経過 / ${dim}日</span></h2>
+      <div class="hr-sub">
+        <span>着地見込み <strong>${forecast === null ? "算出中(3日経過後に表示)" : yen(forecast)}</strong></span>
+        ${target > 0 ? `<span>目標 <strong>${yen(target)}</strong></span><span>達成 <strong>${Math.round(s.inc / target * 100)}%</strong></span>` : `<span>目標未設定(設定画面で登録できます)</span>`}
+      </div>
+      <div class="hint">月の途中のため実績は確定していません。確定値は月末以降にご確認ください。</div>
+    </div>`;
+  }
+  $("main").innerHTML =
+    pageHead(`月次レポート`, `${esc(S.settings.name)} ・ ${fmtMonth(m)}`,
+      `<button class="btn" onclick="go('dash')">‹ ダッシュボードへ</button>${monthNav(m, "reportNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button><button class="btn" onclick="mailReport()">メールで送る</button><button class="btn" onclick="copyReport()">本文をコピー</button>`) +
+    `<div class="tiles">
+      <div class="tile"><div class="t-label">売上</div><div class="t-val">${yen(s.inc)}</div><div class="t-note">${mom}</div></div>
+      <div class="tile"><div class="t-label">支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}</div></div>
+      <div class="tile"><div class="t-label">利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div></div>
+      <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
+      <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
+    </div>` +
+    outlook +
+    `<div class="card"><h2>月別収支 <span class="h2-sub">${fmtMonth(m)}までの6ヶ月</span></h2>${monthlyChartHtml(m)}</div>` +
+    breakdownCardsHtml(m) +
+    `<div class="hint">「印刷 / PDF保存」でブラウザの印刷画面が開きます(送信先を「PDFに保存」にするとPDFになります)。メール本文が長くなる場合は「本文をコピー」で貼り付けてください。</div>`;
+  attachChartTips();
+};
+/* メール本文は5行サマリーのみ(mailtoのURL長制限対策) */
+function reportSummaryLines(m){
+  const s = monthSummary(m);
+  return [
+    `【月次レポート】${S.settings.name} ${fmtMonth(m)}`,
+    `売上: ${yen(s.inc)}`,
+    `支出: ${yen(s.exp)}(うち材料費 ${yen(s.mat)})`,
+    `利益: ${yen(s.profit)}`,
+    `来店: ${s.count}件 / 客単価 ${yen(s.avg)}`
+  ];
+}
+window.mailReport = function(){
+  const m = V.reportMonth;
+  const subject = `【月次レポート】${S.settings.name} ${fmtMonth(m)}`;
+  location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(reportSummaryLines(m).join("\n"))}`;
+};
+window.copyReport = function(){
+  const m = V.reportMonth;
+  const s = monthSummary(m);
+  const vs = visitStats(m);
+  const fmtE = ([label, v]) => `・${label}: ${yen(v)}`;
+  const lines = [...reportSummaryLines(m), ""];
+  const staffE = staffSalesEntries(m);
+  if(staffE.length) lines.push("■スタッフ別売上", ...staffE.map(fmtE), "");
+  const menuE = topN(groupSum(txInMonth(m).filter(t => t.type === "income"), t => t.category || "未分類"), 7);
+  if(menuE.length) lines.push("■メニュー別構成", ...menuE.map(fmtE), "");
+  const expE = topN(groupSum(txInMonth(m).filter(t => t.type === "expense"), t => t.category || "未分類"), 5);
+  if(expE.length) lines.push("■支出内訳", ...expE.map(fmtE), "");
+  if(s.inc > 0) lines.push(`店販比率 ${Math.round(s.retail / s.inc * 100)}% / リピート率 ${vs.nw + vs.rep ? Math.round(vs.rep / (vs.nw + vs.rep) * 100) + "%(カルテ 新規" + vs.nw + "・再来" + vs.rep + ")" : "—(カルテ記録なし)"}`);
+  copyText(lines.join("\n").replace(/\n+$/, ""));
+};
+function copyText(text){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(() => toast("本文をコピーしました"), () => fallbackCopy(text));
+  } else fallbackCopy(text);
+}
+function fallbackCopy(text){
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try{ ok = document.execCommand("copy"); }catch(e){}
+  ta.remove();
+  toast(ok ? "本文をコピーしました" : "コピーできませんでした。お手数ですが手動で選択してください");
 }
 /* ================= money (収支) ================= */
 window.moneyNav = d => { V.moneyMonth = addMonths(V.moneyMonth, d); render(); };
@@ -1149,6 +1369,9 @@ VIEWS.settings = function(){
     `<div class="card"><h2>店舗設定</h2>
       <div class="f-row" style="max-width:320px"><label for="set-name">店名</label>
       <input id="set-name" value="${esc(S.settings.name)}"></div>
+      <div class="f-row" style="max-width:320px"><label for="set-target">月間売上目標(円)</label>
+      <input id="set-target" type="number" inputmode="numeric" min="0" step="10000" value="${num(S.settings.target) > 0 ? num(S.settings.target) : ""}" placeholder="例: 800000">
+      <div class="hint">設定するとダッシュボードに達成メーターが表示されます。空欄で非表示。</div></div>
       <button class="btn pri" onclick="saveSettings()">保存</button>
     </div>
     <div class="card"><h2>バックアップ</h2>
@@ -1167,7 +1390,11 @@ VIEWS.settings = function(){
       <button class="btn danger" onclick="wipeAll()">全データを削除</button>
     </div>`;
 };
-window.saveSettings = function(){ S.settings.name = $("set-name").value || "マイサロン"; save(); toast("保存しました"); render(); };
+window.saveSettings = function(){
+  S.settings.name = $("set-name").value || "マイサロン";
+  S.settings.target = Math.max(0, num($("set-target").value));
+  save(); toast("保存しました"); render();
+};
 window.exportBackup = function(){
   dlText(`salon-backup_${todayStr()}.json`, JSON.stringify(S, null, 1), "application/json");
   toast("バックアップを書き出しました");
