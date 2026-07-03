@@ -1,0 +1,1225 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>サロン経営管理</title>
+<style>
+:root{
+  --bg:#f7f6f3; --surface:#fcfcfb; --surface2:#f2f1ec;
+  --ink:#1a1816; --ink2:#55524d; --muted:#8a877f;
+  --line:#e5e3dc; --line2:#d8d6cd;
+  --accent:#9c4a66; --accent-hover:#833b54; --accent-ink:#ffffff; --accent-soft:#f6e9ee;
+  --income:#2a78d6; --expense:#1baf7a;
+  --good:#006300; --good-chip:#e3f2e3; --warn:#8a5a00; --warn-chip:#faf0d8;
+  --crit:#b03030; --crit-chip:#f9e4e4; --info:#1c5cab; --info-chip:#e2edfb;
+  --grid:#e1e0d9; --axis:#c3c2b7;
+  --shadow:0 1px 2px rgba(26,24,22,.05),0 4px 14px rgba(26,24,22,.06);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121110; --surface:#1a1a19; --surface2:#232321;
+    --ink:#f4f2ec; --ink2:#c3c2b7; --muted:#8f8d85;
+    --line:#2c2c2a; --line2:#3a3a37;
+    --accent:#d78ba3; --accent-hover:#e5a4b8; --accent-ink:#2a0f18; --accent-soft:#332028;
+    --income:#3987e5; --expense:#199e70;
+    --good:#4cc24c; --good-chip:#1d2e1d; --warn:#e5b04d; --warn-chip:#332b17;
+    --crit:#e66767; --crit-chip:#341d1d; --info:#6da7ec; --info-chip:#1c2736;
+    --grid:#2c2c2a; --axis:#383835;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f7f6f3; --surface:#fcfcfb; --surface2:#f2f1ec;
+  --ink:#1a1816; --ink2:#55524d; --muted:#8a877f;
+  --line:#e5e3dc; --line2:#d8d6cd;
+  --accent:#9c4a66; --accent-hover:#833b54; --accent-ink:#ffffff; --accent-soft:#f6e9ee;
+  --income:#2a78d6; --expense:#1baf7a;
+  --good:#006300; --good-chip:#e3f2e3; --warn:#8a5a00; --warn-chip:#faf0d8;
+  --crit:#b03030; --crit-chip:#f9e4e4; --info:#1c5cab; --info-chip:#e2edfb;
+  --grid:#e1e0d9; --axis:#c3c2b7;
+  --shadow:0 1px 2px rgba(26,24,22,.05),0 4px 14px rgba(26,24,22,.06);
+}
+:root[data-theme="dark"]{
+  --bg:#121110; --surface:#1a1a19; --surface2:#232321;
+  --ink:#f4f2ec; --ink2:#c3c2b7; --muted:#8f8d85;
+  --line:#2c2c2a; --line2:#3a3a37;
+  --accent:#d78ba3; --accent-hover:#e5a4b8; --accent-ink:#2a0f18; --accent-soft:#332028;
+  --income:#3987e5; --expense:#199e70;
+  --good:#4cc24c; --good-chip:#1d2e1d; --warn:#e5b04d; --warn-chip:#332b17;
+  --crit:#e66767; --crit-chip:#341d1d; --info:#6da7ec; --info-chip:#1c2736;
+  --grid:#2c2c2a; --axis:#383835;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Yu Gothic","Noto Sans JP",system-ui,-apple-system,sans-serif;
+  font-size:14px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+#app{display:flex;min-height:100vh}
+/* ---- sidebar ---- */
+#sidebar{
+  width:208px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--line);
+  padding:20px 12px;display:flex;flex-direction:column;gap:2px;
+  position:sticky;top:0;height:100vh;overflow-y:auto;
+}
+.brand{padding:4px 12px 16px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.brand .b-name{font-weight:700;font-size:16px;letter-spacing:.02em}
+.brand .b-sub{font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.navbtn{
+  display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  padding:8px 12px;border:0;background:none;color:var(--ink2);
+  font:inherit;font-size:13.5px;border-radius:8px;cursor:pointer;
+}
+.navbtn:hover{background:var(--surface2);color:var(--ink)}
+.navbtn.on{background:var(--accent-soft);color:var(--accent);font-weight:700}
+.navbtn .nb-dot{width:6px;height:6px;border-radius:50%;background:transparent;flex-shrink:0}
+.navbtn.on .nb-dot{background:var(--accent)}
+.nav-sec{font-size:10.5px;color:var(--muted);letter-spacing:.12em;padding:14px 12px 4px;text-transform:uppercase}
+/* ---- main ---- */
+#main{flex:1;min-width:0;padding:24px 28px 64px;max-width:1200px}
+.pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.pagehead h1{font-size:21px;font-weight:700;letter-spacing:.01em}
+.pagehead .ph-sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+.ph-actions{display:flex;gap:8px;flex-wrap:wrap}
+/* ---- cards / layout ---- */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:18px;margin-bottom:16px}
+.card h2{font-size:14.5px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card h2 .h2-sub{font-weight:400;font-size:12px;color:var(--muted)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.grid2>.card{margin-bottom:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px 16px}
+.tile .t-label{font-size:12px;color:var(--muted)}
+.tile .t-val{font-size:24px;font-weight:700;letter-spacing:.01em;margin-top:2px}
+.tile .t-note{font-size:11.5px;color:var(--ink2);margin-top:2px}
+.t-good{color:var(--good)} .t-crit{color:var(--crit)}
+/* ---- buttons ---- */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;
+  border:1px solid var(--line2);background:var(--surface);color:var(--ink);
+  font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;
+}
+.btn:hover{background:var(--surface2)}
+.btn:focus-visible,.navbtn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.btn.pri:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+.btn.sm{padding:3px 9px;font-size:12px;border-radius:6px}
+.btn.danger{color:var(--crit);border-color:var(--crit)}
+.btn.ghost{border-color:transparent;background:none;color:var(--ink2)}
+.btn.ghost:hover{background:var(--surface2)}
+.btn:disabled{opacity:.45;cursor:default}
+/* ---- tables ---- */
+.twrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font-size:11.5px;color:var(--muted);font-weight:600;text-align:left;padding:6px 10px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.total td{font-weight:700;border-top:2px solid var(--line2);background:var(--surface2)}
+tr.rowlink{cursor:pointer} tr.rowlink:hover td{background:var(--surface2)}
+tr.lowstock td{background:var(--crit-chip)}
+/* ---- chips ---- */
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.chip.good{background:var(--good-chip);color:var(--good)}
+.chip.warn{background:var(--warn-chip);color:var(--warn)}
+.chip.crit{background:var(--crit-chip);color:var(--crit)}
+.chip.info{background:var(--info-chip);color:var(--info)}
+.chip.mut{background:var(--surface2);color:var(--ink2)}
+/* ---- forms ---- */
+input,select,textarea{
+  font:inherit;font-size:13.5px;color:var(--ink);background:var(--surface);
+  border:1px solid var(--line2);border-radius:8px;padding:7px 10px;width:100%;
+}
+textarea{resize:vertical;min-height:64px}
+input[type=checkbox]{width:auto}
+.f-row{margin-bottom:12px}
+.f-row label{display:block;font-size:12px;color:var(--ink2);font-weight:600;margin-bottom:4px}
+.f-row .req{color:var(--crit)}
+.f-2col{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.searchbar{max-width:280px}
+/* ---- modal ---- */
+#modal-root{position:fixed;inset:0;display:none;z-index:50}
+#modal-root.open{display:block}
+.m-back{position:absolute;inset:0;background:rgba(15,13,12,.45)}
+.m-box{
+  position:relative;max-width:520px;margin:6vh auto;background:var(--surface);
+  border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.25);
+  padding:20px;max-height:86vh;overflow-y:auto;
+}
+.m-box h3{font-size:16px;margin-bottom:14px}
+.m-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+/* ---- toast ---- */
+#toast{
+  position:fixed;bottom:22px;left:50%;transform:translate(-50%,12px);
+  background:var(--ink);color:var(--bg);padding:9px 18px;border-radius:10px;
+  font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:60;max-width:90vw;
+}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+@media (prefers-reduced-motion: reduce){#toast{transition:none}}
+/* ---- misc ---- */
+.empty{color:var(--muted);font-size:13px;padding:18px 4px;text-align:center}
+.hint{font-size:12px;color:var(--muted);margin-top:8px}
+.mnav{display:inline-flex;align-items:center;gap:6px}
+.mnav .mn-label{font-weight:700;font-size:14.5px;min-width:96px;text-align:center;font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:16px;font-size:12px;color:var(--ink2);margin-bottom:8px}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.chartwrap{position:relative}
+#ctip{
+  position:absolute;display:none;background:var(--ink);color:var(--bg);
+  border-radius:8px;padding:7px 11px;font-size:12px;pointer-events:none;z-index:5;white-space:nowrap;line-height:1.5;
+}
+.shiftchip{
+  display:block;background:var(--accent-soft);color:var(--accent);border-radius:6px;
+  padding:2px 6px;font-size:11.5px;font-weight:600;cursor:pointer;margin:2px 0;border:0;font-family:inherit;width:100%;
+}
+.addcell{border:1px dashed var(--line2);background:none;color:var(--muted);border-radius:6px;width:100%;padding:2px 0;cursor:pointer;font-size:12px}
+.addcell:hover{color:var(--accent);border-color:var(--accent)}
+td.today-col{background:var(--accent-soft)}
+.rcpt-thumb{width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--line);cursor:pointer;display:block}
+.rcpt-none{width:44px;height:44px;border-radius:6px;border:1px dashed var(--line2);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px}
+.imgfull{max-width:100%;border-radius:8px}
+.visit-item{border-left:3px solid var(--accent-soft);padding:6px 12px;margin-bottom:8px}
+.visit-item .v-date{font-weight:700;font-size:12.5px}
+.visit-item .v-body{font-size:13px;color:var(--ink2)}
+.alertline{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--line)}
+.alertline:last-child{border-bottom:0}
+/* ---- mobile ---- */
+@media (max-width:760px){
+  #app{flex-direction:column}
+  #sidebar{
+    width:100%;height:auto;position:sticky;top:0;z-index:10;
+    flex-direction:row;align-items:center;overflow-x:auto;overflow-y:hidden;
+    padding:8px 10px;border-right:0;border-bottom:1px solid var(--line);gap:4px;
+  }
+  .brand{border:0;margin:0;padding:0 10px 0 4px}
+  .brand .b-sub{display:none}
+  .navbtn{width:auto;white-space:nowrap;padding:6px 10px}
+  .nav-sec{display:none}
+  #main{padding:16px 14px 56px}
+  .f-2col{grid-template-columns:1fr}
+}
+@media print{
+  #sidebar,.ph-actions,.btn,#toast{display:none !important}
+  body{background:#fff}
+  .card{box-shadow:none;break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <nav id="sidebar" aria-label="メニュー"></nav>
+  <main id="main"></main>
+</div>
+<div id="modal-root" role="dialog" aria-modal="true"></div>
+<div id="toast" role="status"></div>
+<script>
+"use strict";
+/* ================= state ================= */
+const LS_KEY = "salon-mgr-v1";
+const DEFAULTS = {
+  settings: { name: "マイサロン" },
+  staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
+  tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId}
+  receipts: [],   // {id,date,vendor,amount,category,memo,img}
+  shifts: [],     // {id,staffId,date,start,end,brk,note}
+  payAdj: {},     // key `${staffId}_${month}` -> {allow,deduct,memo,paid,booked}
+  orders: [],     // {id,date,supplier,item,qty,unit,amount,memo,status,invId,deliveredDate,booked}
+  inv: [],        // {id,name,category,qty,unit,minQty,price}
+  customers: [],  // {id,name,kana,phone,birthday,memo,visits:[{id,date,menu,staffId,price,note}]}
+  appts: []       // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo}
+};
+let S = loadState();
+function loadState(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(!raw) return structuredClone(DEFAULTS);
+    const d = JSON.parse(raw);
+    return Object.assign(structuredClone(DEFAULTS), d);
+  }catch(e){ return structuredClone(DEFAULTS); }
+}
+function save(){
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(S)); }
+  catch(e){ toast("保存に失敗しました。容量不足の可能性があります(設定→バックアップ参照)"); }
+}
+/* ================= helpers ================= */
+const $ = id => document.getElementById(id);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const yen = n => "¥" + Math.round(n || 0).toLocaleString("ja-JP");
+const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const todayStr = () => { const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+const thisMonth = () => todayStr().slice(0,7);
+const WD = ["日","月","火","水","木","金","土"];
+function fmtDate(iso){ if(!iso) return ""; const [y,m,d] = iso.split("-"); const dt = new Date(+y, +m-1, +d); return `${+m}/${+d}(${WD[dt.getDay()]})`; }
+function fmtMonth(m){ const [y,mo] = m.split("-"); return `${y}年${+mo}月`; }
+function addMonths(m, delta){ const [y,mo] = m.split("-").map(Number); const dt = new Date(y, mo-1+delta, 1); return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0"); }
+function addDays(iso, delta){ const [y,m,d] = iso.split("-").map(Number); const dt = new Date(y, m-1, d+delta); return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0"); }
+function mondayOf(iso){ const [y,m,d] = iso.split("-").map(Number); const dt = new Date(y, m-1, d); const shift = (dt.getDay()+6)%7; return addDays(iso, -shift); }
+function toMin(t){ if(!t) return 0; const [h,m] = t.split(":").map(Number); return h*60 + (m||0); }
+function shiftHours(sh){ const mins = toMin(sh.end) - toMin(sh.start) - num(sh.brk); return Math.max(0, mins)/60; }
+const staffName = id => (S.staff.find(s => s.id === id) || {}).name || "—";
+function toast(msg){
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+/* categories */
+const INCOME_CATS = ["カット","カラー","パーマ","縮毛矯正","トリートメント","ヘッドスパ","セット・着付け","店販(商品売上)","その他収入"];
+const EXPENSE_CATS = ["材料費","店販仕入","家賃","水道光熱費","通信費","広告宣伝費","消耗品費","人件費","外注費","交通費","会議・交際費","研修費","修繕費","リース料","保険料","支払手数料","雑費"];
+const INV_CATS = ["施術材料","店販商品","備品・消耗品"];
+/* ================= modal / forms ================= */
+let _form = null, _formImg = {};
+function openModal(html){ $("modal-root").innerHTML = `<div class="m-back" onclick="closeModal()"></div><div class="m-box">${html}</div>`; $("modal-root").classList.add("open"); }
+function closeModal(){ $("modal-root").classList.remove("open"); $("modal-root").innerHTML = ""; _form = null; _formImg = {}; }
+function ask(msg, onYes){
+  window._askYes = () => { closeModal(); onYes(); };
+  openModal(`<h3>確認</h3><p style="font-size:13.5px">${esc(msg)}</p>
+    <div class="m-foot"><button class="btn" onclick="closeModal()">キャンセル</button>
+    <button class="btn danger" onclick="_askYes()">実行する</button></div>`);
+}
+function fieldHtml(f, val){
+  const id = "ff-" + f.key;
+  const reqMark = f.required ? ' <span class="req">*</span>' : "";
+  let inner = "";
+  if(f.type === "select"){
+    const opts = (f.options || []).map(o => {
+      const [v, l] = Array.isArray(o) ? o : [o, o];
+      return `<option value="${esc(v)}"${String(v) === String(val) ? " selected" : ""}>${esc(l)}</option>`;
+    }).join("");
+    inner = `<select id="${id}">${f.blank ? `<option value="">${esc(f.blank)}</option>` : ""}${opts}</select>`;
+  } else if(f.type === "textarea"){
+    inner = `<textarea id="${id}">${esc(val)}</textarea>`;
+  } else if(f.type === "image"){
+    const prev = val ? `<img src="${val}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">` : "";
+    if(val) _formImg[f.key] = val;
+    inner = `<input type="file" id="${id}" accept="image/*" onchange="onImgPick('${f.key}',this)"><div id="${id}-prev">${prev}</div>`;
+  } else {
+    const t = f.type || "text";
+    const extra = t === "number" ? ` inputmode="decimal" step="${f.step || "1"}" min="${f.min ?? ""}"` : "";
+    inner = `<input type="${t}" id="${id}" value="${esc(val)}"${extra}${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ""}>`;
+  }
+  return `<div class="f-row"${f.half ? ' data-half="1"' : ""}><label for="${id}">${esc(f.label)}${reqMark}</label>${inner}</div>`;
+}
+function openForm(cfg){
+  _form = cfg; _formImg = {};
+  let body = "", i = 0;
+  const fs = cfg.fields;
+  while(i < fs.length){
+    const f = fs[i], val = (cfg.data && cfg.data[f.key] !== undefined) ? cfg.data[f.key] : (f.value ?? "");
+    if(f.half && fs[i+1] && fs[i+1].half){
+      const f2 = fs[i+1], val2 = (cfg.data && cfg.data[f2.key] !== undefined) ? cfg.data[f2.key] : (f2.value ?? "");
+      body += `<div class="f-2col">${fieldHtml(f, val)}${fieldHtml(f2, val2)}</div>`;
+      i += 2;
+    } else { body += fieldHtml(f, val); i++; }
+  }
+  openModal(`<h3>${esc(cfg.title)}</h3><form onsubmit="return submitForm(event)">${body}
+    <div class="m-foot"><button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+    <button type="submit" class="btn pri">${esc(cfg.saveLabel || "保存")}</button></div></form>`);
+  const first = $("ff-" + fs[0].key); if(first) first.focus();
+}
+function submitForm(e){
+  e.preventDefault();
+  const vals = {};
+  for(const f of _form.fields){
+    const elx = $("ff-" + f.key);
+    if(f.type === "image"){ vals[f.key] = _formImg[f.key] || ""; continue; }
+    let v = elx ? elx.value : "";
+    if(f.type === "number") v = num(v);
+    vals[f.key] = v;
+    if(f.required && (v === "" || v === null)){ toast(`「${f.label}」を入力してください`); elx.focus(); return false; }
+  }
+  const cb = _form.onsave;
+  closeModal();
+  cb(vals);
+  return false;
+}
+function onImgPick(key, input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1000;
+      let w = img.width, h = img.height;
+      if(Math.max(w,h) > MAX){ const r = MAX/Math.max(w,h); w = Math.round(w*r); h = Math.round(h*r); }
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      cv.getContext("2d").drawImage(img, 0, 0, w, h);
+      _formImg[key] = cv.toDataURL("image/jpeg", 0.72);
+      $("ff-" + key + "-prev").innerHTML = `<img src="${_formImg[key]}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">`;
+    };
+    img.src = rd.result;
+  };
+  rd.readAsDataURL(file);
+}
+/* ================= CSV / download ================= */
+function csvEsc(v){ v = String(v ?? ""); return /[",\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v; }
+function dlText(name, text, mime){
+  const blob = new Blob([text], {type: mime || "text/plain"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function dlCSV(name, rows){
+  dlText(name, "﻿" + rows.map(r => r.map(csvEsc).join(",")).join("\r\n"), "text/csv");
+  toast("CSVをダウンロードしました");
+}
+/* ================= aggregation ================= */
+const txInMonth = m => S.tx.filter(t => t.date && t.date.startsWith(m));
+const sumTx = (list, type) => list.filter(t => t.type === type).reduce((a,t) => a + num(t.amount), 0);
+function staffMonthHours(staffId, m){ return S.shifts.filter(s => s.staffId === staffId && s.date.startsWith(m)).reduce((a,s) => a + shiftHours(s), 0); }
+function staffMonthSales(staffId, m){ return txInMonth(m).filter(t => t.type === "income" && t.staffId === staffId).reduce((a,t) => a + num(t.amount), 0); }
+function calcPay(st, m){
+  const adj = S.payAdj[st.id + "_" + m] || {};
+  const hours = staffMonthHours(st.id, m);
+  const base = st.payType === "monthly" ? num(st.wage) : Math.round(hours * num(st.wage));
+  const sales = staffMonthSales(st.id, m);
+  const comm = Math.round(sales * num(st.commission) / 100);
+  const total = base + comm + num(adj.allow) - num(adj.deduct);
+  return { hours, base, sales, comm, allow: num(adj.allow), deduct: num(adj.deduct), total, paid: !!adj.paid, booked: !!adj.booked, memo: adj.memo || "" };
+}
+/* ================= navigation ================= */
+const NAV = [
+  {sec:"ホーム"},
+  {id:"dash", label:"ダッシュボード"},
+  {sec:"日々の業務"},
+  {id:"appts", label:"予約管理"},
+  {id:"money", label:"収支管理"},
+  {id:"receipts", label:"領収書管理"},
+  {sec:"スタッフ"},
+  {id:"shifts", label:"シフト管理"},
+  {id:"payroll", label:"給料管理"},
+  {id:"staff", label:"スタッフ登録"},
+  {sec:"物品"},
+  {id:"orders", label:"発注管理"},
+  {id:"inv", label:"在庫管理"},
+  {sec:"顧客"},
+  {id:"customers", label:"顧客カルテ"},
+  {sec:"その他"},
+  {id:"settings", label:"設定・バックアップ"}
+];
+let cur = "dash";
+const V = {}; // view state
+V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth();
+V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
+V.orderFilter = "all"; V.custSel = null; V.custQ = "";
+function go(view){ cur = view; render(); window.scrollTo(0,0); }
+function render(){
+  $("sidebar").innerHTML =
+    `<div class="brand"><div class="b-name">${esc(S.settings.name)}</div><div class="b-sub">Salon Manager</div></div>` +
+    NAV.map(n => n.sec
+      ? `<div class="nav-sec">${esc(n.sec)}</div>`
+      : `<button class="navbtn${cur === n.id ? " on" : ""}" onclick="go('${n.id}')"><span class="nb-dot"></span>${esc(n.label)}</button>`
+    ).join("");
+  VIEWS[cur]();
+}
+function pageHead(title, sub, actions){
+  return `<div class="pagehead"><div><h1>${title}</h1>${sub ? `<div class="ph-sub">${sub}</div>` : ""}</div><div class="ph-actions">${actions || ""}</div></div>`;
+}
+function monthNav(month, fnName){
+  return `<span class="mnav"><button class="btn sm" onclick="${fnName}(-1)" aria-label="前月">‹</button><span class="mn-label">${fmtMonth(month)}</span><button class="btn sm" onclick="${fnName}(1)" aria-label="翌月">›</button></span>`;
+}
+const VIEWS = {};
+/* ================= dashboard ================= */
+VIEWS.dash = function(){
+  const m = thisMonth(), tday = todayStr();
+  const mtx = txInMonth(m);
+  const incM = sumTx(mtx, "income"), expM = sumTx(mtx, "expense");
+  const incToday = S.tx.filter(t => t.date === tday && t.type === "income").reduce((a,t) => a + num(t.amount), 0);
+  const profit = incM - expM;
+  const custToday = S.tx.filter(t => t.date === tday && t.type === "income").length;
+  /* alerts */
+  const low = S.inv.filter(i => num(i.qty) <= num(i.minQty) && num(i.minQty) > 0);
+  const pendingOrders = S.orders.filter(o => o.status !== "done");
+  const apptsToday = S.appts.filter(a => a.date === tday && a.status === "open").sort((a,b) => a.time.localeCompare(b.time));
+  const shiftsToday = S.shifts.filter(s => s.date === tday);
+  const alerts = [];
+  low.forEach(i => alerts.push(`<div class="alertline"><span class="chip crit">在庫不足</span>${esc(i.name)}(残り ${i.qty}${esc(i.unit || "")} / 最低 ${i.minQty})</div>`));
+  pendingOrders.filter(o => o.status === "draft").forEach(o => alerts.push(`<div class="alertline"><span class="chip warn">未発注</span>${esc(o.item)}(${esc(o.supplier)})</div>`));
+  const hasData = S.tx.length > 0;
+  $("main").innerHTML =
+    pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
+      `<button class="btn pri" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button>`) +
+    `<div class="tiles">
+      <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の売上</div><div class="t-val">${yen(incM)}</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(expM)}</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${profit >= 0 ? "t-good" : "t-crit"}">${yen(profit)}</div></div>
+    </div>
+    <div class="card"><h2>月別収支 <span class="h2-sub">直近6ヶ月</span></h2>
+      ${hasData ? monthlyChartHtml() : `<div class="empty">まだ収支データがありません。「+ 売上を記録」から始めるか、設定画面でサンプルデータを投入してお試しください。</div>`}
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>今日の予約 <span class="h2-sub">${apptsToday.length}件</span></h2>
+        ${apptsToday.length ? apptsToday.map(a =>
+          `<div class="alertline"><strong style="font-variant-numeric:tabular-nums">${esc(a.time)}</strong> ${esc(a.name)} <span class="chip mut">${esc(a.menu || "")}</span> <span style="color:var(--muted);font-size:12px">${esc(staffName(a.staffId))}</span></div>`).join("")
+          : `<div class="empty">今日の予約はありません</div>`}
+        <div style="margin-top:10px"><button class="btn sm" onclick="go('appts')">予約管理へ ›</button></div>
+      </div>
+      <div class="card"><h2>今日のシフト</h2>
+        ${shiftsToday.length ? shiftsToday.map(s =>
+          `<div class="alertline">${esc(staffName(s.staffId))} <strong style="font-variant-numeric:tabular-nums">${esc(s.start)}–${esc(s.end)}</strong></div>`).join("")
+          : `<div class="empty">今日のシフト登録はありません</div>`}
+        <div style="margin-top:10px"><button class="btn sm" onclick="go('shifts')">シフト管理へ ›</button></div>
+      </div>
+      <div class="card"><h2>アラート</h2>
+        ${alerts.length ? alerts.join("") : `<div class="empty">対応が必要な項目はありません</div>`}
+      </div>
+    </div>`;
+  attachChartTips();
+};
+function lastMonths(n){
+  const arr = []; let m = thisMonth();
+  for(let i = n-1; i >= 0; i--) arr.push(addMonths(m, -i));
+  return arr;
+}
+function fmtAxis(n){
+  if(n >= 10000) return (n/10000).toLocaleString("ja-JP", {maximumFractionDigits:1}) + "万";
+  return n.toLocaleString("ja-JP");
+}
+let _chartData = [];
+function monthlyChartHtml(){
+  const months = lastMonths(6);
+  _chartData = months.map(m => {
+    const t = txInMonth(m);
+    return { m, inc: sumTx(t, "income"), exp: sumTx(t, "expense") };
+  });
+  const W = 660, H = 230, padL = 58, padR = 10, padT = 10, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const rawMax = Math.max(1, ...(_chartData.flatMap(d => [d.inc, d.exp])));
+  const STEPS = 4;
+  const unit = Math.pow(10, Math.floor(Math.log10(rawMax / STEPS)));
+  let step = Math.ceil(rawMax / STEPS / unit) * unit;
+  for(const nice of [1, 2, 2.5, 5, 10]){ if(nice * unit * STEPS >= rawMax){ step = nice * unit; break; } }
+  const yMax = step * STEPS;
+  const y = v => padT + plotH - (v / yMax) * plotH;
+  const groupW = plotW / months.length;
+  const barW = Math.min(26, (groupW - 18) / 2);
+  let grid = "", bars = "", hits = "", labels = "";
+  for(let i = 1; i <= STEPS; i++){
+    const gy = y(step * i);
+    grid += `<line x1="${padL}" x2="${W - padR}" y1="${gy}" y2="${gy}" stroke="var(--grid)" stroke-width="1"/>`;
+    labels += `<text x="${padL - 8}" y="${gy + 4}" text-anchor="end" font-size="10.5" fill="var(--muted)">${fmtAxis(step * i)}</text>`;
+  }
+  _chartData.forEach((d, i) => {
+    const cx = padL + groupW * i + groupW / 2;
+    const x1 = cx - barW - 1, x2 = cx + 1; // 2px gap between the pair
+    bars += barPath(x1, y(d.inc), barW, padT + plotH, "var(--income)");
+    bars += barPath(x2, y(d.exp), barW, padT + plotH, "var(--expense)");
+    labels += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--muted)">${+d.m.slice(5)}月</text>`;
+    hits += `<rect data-ci="${i}" x="${padL + groupW * i}" y="${padT}" width="${groupW}" height="${plotH}" fill="transparent" class="c-hit"/>`;
+  });
+  const table = `<div class="twrap" style="margin-top:10px"><table>
+    <tr><th>月</th><th class="num">収入</th><th class="num">支出</th><th class="num">差引</th></tr>
+    ${_chartData.map(d => `<tr><td>${fmtMonth(d.m)}</td><td class="num">${yen(d.inc)}</td><td class="num">${yen(d.exp)}</td><td class="num" style="color:${d.inc - d.exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(d.inc - d.exp)}</td></tr>`).join("")}
+  </table></div>`;
+  return `<div class="legend"><span><span class="sw" style="background:var(--income)"></span>収入</span><span><span class="sw" style="background:var(--expense)"></span>支出</span></div>
+    <div class="chartwrap"><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="月別の収入と支出の棒グラフ。詳細は下の表を参照。">
+    ${grid}<line x1="${padL}" x2="${W - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="var(--axis)" stroke-width="1"/>
+    ${bars}${labels}${hits}</svg><div id="ctip"></div></div>${table}`;
+}
+function barPath(x, top, w, bottom, fill){
+  const h = bottom - top;
+  if(h < 0.5) return "";
+  const r = Math.min(4, h, w / 2);
+  return `<path d="M${x},${bottom} L${x},${top + r} Q${x},${top} ${x + r},${top} L${x + w - r},${top} Q${x + w},${top} ${x + w},${top + r} L${x + w},${bottom} Z" fill="${fill}"/>`;
+}
+function attachChartTips(){
+  const tip = $("ctip");
+  if(!tip) return;
+  document.querySelectorAll(".c-hit").forEach(r => {
+    r.addEventListener("mousemove", ev => {
+      const d = _chartData[+r.dataset.ci];
+      tip.innerHTML = `<strong>${fmtMonth(d.m)}</strong><br>収入 ${yen(d.inc)}<br>支出 ${yen(d.exp)}<br>差引 ${yen(d.inc - d.exp)}`;
+      tip.style.display = "block";
+      const wrap = r.closest(".chartwrap").getBoundingClientRect();
+      let x = ev.clientX - wrap.left + 14, ty = ev.clientY - wrap.top - 10;
+      if(x + 150 > wrap.width) x -= 165;
+      tip.style.left = x + "px"; tip.style.top = ty + "px";
+    });
+    r.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  });
+}
+/* ================= money (収支) ================= */
+window.moneyNav = d => { V.moneyMonth = addMonths(V.moneyMonth, d); render(); };
+VIEWS.money = function(){
+  const m = V.moneyMonth;
+  const list = txInMonth(m).sort((a,b) => b.date.localeCompare(a.date) || (b.id > a.id ? 1 : -1));
+  const inc = sumTx(list, "income"), exp = sumTx(list, "expense");
+  /* category totals */
+  const catTot = {};
+  list.forEach(t => { const k = t.type + "|" + t.category; catTot[k] = (catTot[k] || 0) + num(t.amount); });
+  const catRows = Object.entries(catTot).sort((a,b) => b[1] - a[1]).map(([k,v]) => {
+    const [type, cat] = k.split("|");
+    return `<tr><td><span class="chip ${type === "income" ? "info" : "mut"}">${type === "income" ? "収入" : "支出"}</span></td><td>${esc(cat)}</td><td class="num">${yen(v)}</td></tr>`;
+  }).join("");
+  $("main").innerHTML =
+    pageHead("収支管理", "日々の売上と経費を記録します",
+      `<button class="btn pri" onclick="addTx('income')">+ 収入</button><button class="btn" onclick="addTx('expense')">+ 支出</button><button class="btn" onclick="exportTxCsv()">CSV出力</button>`) +
+    `<div class="card" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      ${monthNav(m, "moneyNav")}
+      <span>収入 <strong style="font-size:17px">${yen(inc)}</strong></span>
+      <span>支出 <strong style="font-size:17px">${yen(exp)}</strong></span>
+      <span>差引 <strong style="font-size:17px;color:${inc - exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(inc - exp)}</strong></span>
+    </div>
+    <div class="card"><h2>明細 <span class="h2-sub">${list.length}件</span></h2>
+      <div class="twrap">${list.length ? `<table>
+        <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>担当</th><th>メモ</th><th></th></tr>
+        ${list.map(t => `<tr>
+          <td style="white-space:nowrap">${fmtDate(t.date)}</td>
+          <td><span class="chip ${t.type === "income" ? "info" : "mut"}">${t.type === "income" ? "収入" : "支出"}</span></td>
+          <td>${esc(t.category)}</td>
+          <td class="num" style="font-weight:600">${yen(t.amount)}</td>
+          <td>${t.staffId ? esc(staffName(t.staffId)) : ""}</td>
+          <td style="color:var(--ink2);max-width:220px">${esc(t.memo)}</td>
+          <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editTx('${t.id}')">編集</button><button class="btn sm ghost" onclick="delTx('${t.id}')">削除</button></td>
+        </tr>`).join("")}</table>` : `<div class="empty">${fmtMonth(m)}の記録はまだありません</div>`}</div>
+    </div>
+    ${catRows ? `<div class="card"><h2>カテゴリ別集計</h2><div class="twrap"><table><tr><th>区分</th><th>カテゴリ</th><th class="num">合計</th></tr>${catRows}</table></div></div>` : ""}`;
+};
+function txFields(type){
+  return [
+    {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
+    {key:"amount", label:"金額(円)", type:"number", required:true, min:0, half:true},
+    {key:"category", label:"カテゴリ", type:"select", options: type === "income" ? INCOME_CATS : EXPENSE_CATS},
+    {key:"staffId", label: type === "income" ? "担当スタッフ(歩合計算に使用)" : "関連スタッフ", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
+    {key:"memo", label:"メモ", type:"text", placeholder: type === "income" ? "お客様名・メニューなど" : "支払先など"}
+  ];
+}
+window.addTx = function(type){
+  openForm({ title: type === "income" ? "収入を記録" : "支出を記録", fields: txFields(type),
+    onsave: v => { S.tx.push({id: uid(), type, ...v}); save(); toast("記録しました"); render(); } });
+};
+window.editTx = function(id){
+  const t = S.tx.find(x => x.id === id); if(!t) return;
+  openForm({ title:"記録を編集", fields: txFields(t.type), data: t,
+    onsave: v => { Object.assign(t, v); save(); toast("更新しました"); render(); } });
+};
+window.delTx = function(id){
+  ask("この記録を削除しますか?", () => { S.tx = S.tx.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
+window.exportTxCsv = function(){
+  const m = V.moneyMonth;
+  const rows = [["日付","区分","カテゴリ","金額","担当","メモ"]];
+  txInMonth(m).sort((a,b) => a.date.localeCompare(b.date)).forEach(t =>
+    rows.push([t.date, t.type === "income" ? "収入" : "支出", t.category, t.amount, t.staffId ? staffName(t.staffId) : "", t.memo]));
+  dlCSV(`収支_${m}.csv`, rows);
+};
+/* ================= receipts ================= */
+window.rcptNav = d => { V.rcptMonth = addMonths(V.rcptMonth, d); render(); };
+VIEWS.receipts = function(){
+  const m = V.rcptMonth;
+  const list = S.receipts.filter(r => r.date && r.date.startsWith(m)).sort((a,b) => b.date.localeCompare(a.date));
+  const total = list.reduce((a,r) => a + num(r.amount), 0);
+  $("main").innerHTML =
+    pageHead("領収書管理", "写真付きで保管し、確定申告や経費精算に備えます",
+      `<button class="btn pri" onclick="addRcpt()">+ 領収書を登録</button><button class="btn" onclick="exportRcptCsv()">CSV出力</button>`) +
+    `<div class="card" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      ${monthNav(m, "rcptNav")}
+      <span>${list.length}枚 ・ 合計 <strong style="font-size:17px">${yen(total)}</strong></span>
+    </div>
+    <div class="card"><div class="twrap">${list.length ? `<table>
+      <tr><th>写真</th><th>日付</th><th>発行元</th><th class="num">金額</th><th>カテゴリ</th><th>メモ</th><th></th></tr>
+      ${list.map(r => `<tr>
+        <td>${r.img ? `<img src="${r.img}" class="rcpt-thumb" alt="領収書" onclick="viewRcpt('${r.id}')">` : `<div class="rcpt-none">なし</div>`}</td>
+        <td style="white-space:nowrap">${fmtDate(r.date)}</td>
+        <td>${esc(r.vendor)}</td>
+        <td class="num" style="font-weight:600">${yen(r.amount)}</td>
+        <td>${esc(r.category)}</td>
+        <td style="color:var(--ink2)">${esc(r.memo)}</td>
+        <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editRcpt('${r.id}')">編集</button><button class="btn sm ghost" onclick="delRcpt('${r.id}')">削除</button></td>
+      </tr>`).join("")}</table>` : `<div class="empty">${fmtMonth(m)}の領収書はまだありません</div>`}</div>
+      <div class="hint">画像は自動で縮小して端末内に保存されます。登録と同時に「支出にも計上」を選ぶと収支管理へ反映されます。</div>
+    </div>`;
+};
+function rcptFields(){
+  return [
+    {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
+    {key:"amount", label:"金額(円)", type:"number", required:true, min:0, half:true},
+    {key:"vendor", label:"発行元(店名)", type:"text", required:true},
+    {key:"category", label:"経費カテゴリ", type:"select", options: EXPENSE_CATS},
+    {key:"memo", label:"メモ", type:"text"},
+    {key:"img", label:"領収書の写真", type:"image"},
+    {key:"book", label:"支出にも計上する", type:"select", options:[["yes","はい(収支管理に支出を追加)"],["no","いいえ(保管のみ)"]]}
+  ];
+}
+window.addRcpt = function(){
+  openForm({ title:"領収書を登録", fields: rcptFields(),
+    onsave: v => {
+      const {book, ...r} = v;
+      S.receipts.push({id: uid(), ...r});
+      if(book === "yes") S.tx.push({id: uid(), type:"expense", date: r.date, category: r.category, amount: r.amount, memo: `領収書: ${r.vendor}`, staffId:""});
+      save(); toast(book === "yes" ? "登録し、支出にも計上しました" : "登録しました"); render();
+    } });
+};
+window.editRcpt = function(id){
+  const r = S.receipts.find(x => x.id === id); if(!r) return;
+  const fs = rcptFields().filter(f => f.key !== "book");
+  openForm({ title:"領収書を編集", fields: fs, data: r,
+    onsave: v => { Object.assign(r, v); save(); toast("更新しました"); render(); } });
+};
+window.delRcpt = function(id){
+  ask("この領収書を削除しますか?", () => { S.receipts = S.receipts.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
+window.viewRcpt = function(id){
+  const r = S.receipts.find(x => x.id === id); if(!r || !r.img) return;
+  openModal(`<h3>${esc(r.vendor)} ・ ${yen(r.amount)}</h3><img src="${r.img}" class="imgfull" alt="領収書">
+    <div class="m-foot"><button class="btn" onclick="closeModal()">閉じる</button></div>`);
+};
+window.exportRcptCsv = function(){
+  const m = V.rcptMonth;
+  const rows = [["日付","発行元","金額","カテゴリ","メモ","写真"]];
+  S.receipts.filter(r => r.date && r.date.startsWith(m)).sort((a,b) => a.date.localeCompare(b.date))
+    .forEach(r => rows.push([r.date, r.vendor, r.amount, r.category, r.memo, r.img ? "あり" : "なし"]));
+  dlCSV(`領収書_${m}.csv`, rows);
+};
+/* ================= shifts ================= */
+window.weekNav = d => { V.weekStart = addDays(V.weekStart, d * 7); render(); };
+window.weekToday = () => { V.weekStart = mondayOf(todayStr()); render(); };
+VIEWS.shifts = function(){
+  const days = Array.from({length:7}, (_,i) => addDays(V.weekStart, i));
+  const tday = todayStr();
+  const head = days.map(d => `<th${d === tday ? ' class="today-col"' : ""} style="min-width:88px;text-align:center">${fmtDate(d)}</th>`).join("");
+  const rows = S.staff.map(st => {
+    let weekH = 0;
+    const cells = days.map(d => {
+      const shs = S.shifts.filter(s => s.staffId === st.id && s.date === d);
+      shs.forEach(s => weekH += shiftHours(s));
+      return `<td${d === tday ? ' class="today-col"' : ""} style="text-align:center">
+        ${shs.map(s => `<button class="shiftchip" onclick="editShift('${s.id}')" title="クリックで編集">${esc(s.start)}–${esc(s.end)}</button>`).join("")}
+        <button class="addcell" onclick="addShift('${st.id}','${d}')" aria-label="シフト追加">+</button>
+      </td>`;
+    }).join("");
+    return `<tr><td style="font-weight:600;white-space:nowrap">${esc(st.name)}</td>${cells}<td class="num" style="white-space:nowrap">${weekH.toFixed(1)}h</td></tr>`;
+  }).join("");
+  $("main").innerHTML =
+    pageHead("シフト管理", "セルの「+」をクリックして勤務時間を登録します",
+      `<span class="mnav"><button class="btn sm" onclick="weekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="weekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="weekToday()">今週</button>`) +
+    (S.staff.length
+      ? `<div class="card"><div class="twrap"><table><tr><th>スタッフ</th>${head}<th class="num">週合計</th></tr>${rows}</table></div>
+         <div class="hint">休憩時間は勤務時間から自動で差し引かれ、給料管理の時給計算に反映されます。</div></div>`
+      : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
+};
+function shiftFields(){
+  return [
+    {key:"start", label:"開始", type:"time", value:"10:00", required:true, half:true},
+    {key:"end", label:"終了", type:"time", value:"19:00", required:true, half:true},
+    {key:"brk", label:"休憩(分)", type:"number", value:60, min:0, half:true},
+    {key:"note", label:"メモ", type:"text", half:true}
+  ];
+}
+window.addShift = function(staffId, date){
+  openForm({ title: `${staffName(staffId)} ・ ${fmtDate(date)} のシフト`, fields: shiftFields(),
+    onsave: v => {
+      if(toMin(v.end) <= toMin(v.start)){ toast("終了時刻は開始より後にしてください"); return; }
+      S.shifts.push({id: uid(), staffId, date, ...v}); save(); toast("シフトを登録しました"); render();
+    } });
+};
+window.editShift = function(id){
+  const s = S.shifts.find(x => x.id === id); if(!s) return;
+  const fs = shiftFields();
+  window._delShift = () => { closeModal(); ask("このシフトを削除しますか?", () => { S.shifts = S.shifts.filter(x => x.id !== id); save(); toast("削除しました"); render(); }); };
+  openForm({ title: `${staffName(s.staffId)} ・ ${fmtDate(s.date)} のシフト`, fields: fs, data: s,
+    onsave: v => {
+      if(toMin(v.end) <= toMin(v.start)){ toast("終了時刻は開始より後にしてください"); return; }
+      Object.assign(s, v); save(); toast("更新しました"); render();
+    } });
+  document.querySelector(".m-foot").insertAdjacentHTML("afterbegin", `<button type="button" class="btn danger" style="margin-right:auto" onclick="_delShift()">削除</button>`);
+};
+/* ================= payroll ================= */
+window.payNav = d => { V.payMonth = addMonths(V.payMonth, d); render(); };
+VIEWS.payroll = function(){
+  const m = V.payMonth;
+  let sumTotal = 0;
+  const rows = S.staff.map(st => {
+    const p = calcPay(st, m);
+    sumTotal += p.total;
+    return `<tr>
+      <td style="font-weight:600;white-space:nowrap">${esc(st.name)}<div style="font-size:11px;color:var(--muted)">${st.payType === "monthly" ? "月給" : "時給 " + yen(st.wage)}${num(st.commission) ? " ・ 歩合" + st.commission + "%" : ""}</div></td>
+      <td class="num">${p.hours.toFixed(1)}h</td>
+      <td class="num">${yen(p.base)}</td>
+      <td class="num" title="担当売上 ${yen(p.sales)}">${yen(p.comm)}</td>
+      <td class="num">${yen(p.allow)}</td>
+      <td class="num">${p.deduct ? "−" + yen(p.deduct).slice(1) : yen(0)}</td>
+      <td class="num" style="font-weight:700">${yen(p.total)}</td>
+      <td>${p.paid ? '<span class="chip good">支払済</span>' : '<span class="chip warn">未払</span>'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn sm ghost" onclick="editAdj('${st.id}')">調整</button>
+        <button class="btn sm ghost" onclick="bookPay('${st.id}')" ${p.booked ? "disabled" : ""}>${p.booked ? "計上済" : "支出に計上"}</button>
+      </td>
+    </tr>`;
+  }).join("");
+  $("main").innerHTML =
+    pageHead("給料管理", "シフトの勤務時間と担当売上から自動計算します",
+      `${monthNav(m, "payNav")}<button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
+    (S.staff.length
+      ? `<div class="card"><div class="twrap"><table>
+          <tr><th>スタッフ</th><th class="num">勤務時間</th><th class="num">基本給</th><th class="num">歩合</th><th class="num">手当</th><th class="num">控除</th><th class="num">支給額</th><th>状態</th><th></th></tr>
+          ${rows}
+          <tr class="total"><td>合計</td><td></td><td></td><td></td><td></td><td></td><td class="num">${yen(sumTotal)}</td><td></td><td></td></tr>
+        </table></div>
+        <div class="hint">基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。</div></div>`
+      : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
+};
+window.editAdj = function(staffId){
+  const key = staffId + "_" + V.payMonth;
+  const adj = S.payAdj[key] || {};
+  openForm({ title: `${staffName(staffId)} ・ ${fmtMonth(V.payMonth)}の調整`, data: adj,
+    fields: [
+      {key:"allow", label:"手当(交通費・役職手当など/円)", type:"number", value:0, min:0},
+      {key:"deduct", label:"控除(社会保険・源泉徴収など/円)", type:"number", value:0, min:0},
+      {key:"paid", label:"支払状況", type:"select", options:[["","未払"],["1","支払済"]], value: adj.paid ? "1" : ""},
+      {key:"memo", label:"メモ", type:"text"}
+    ],
+    onsave: v => {
+      S.payAdj[key] = Object.assign({}, S.payAdj[key], {allow: v.allow, deduct: v.deduct, paid: !!v.paid, memo: v.memo});
+      save(); toast("調整を保存しました"); render();
+    } });
+};
+window.bookPay = function(staffId){
+  const st = S.staff.find(s => s.id === staffId); if(!st) return;
+  const m = V.payMonth;
+  const p = calcPay(st, m);
+  ask(`${st.name}の${fmtMonth(m)}分給与 ${yen(p.total)} を人件費として支出に計上し、支払済にしますか?`, () => {
+    const key = staffId + "_" + m;
+    S.tx.push({id: uid(), type:"expense", date: todayStr(), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId});
+    S.payAdj[key] = Object.assign({}, S.payAdj[key], {paid:true, booked:true});
+    save(); toast("支出に計上しました"); render();
+  });
+};
+window.exportPayCsv = function(){
+  const m = V.payMonth;
+  const rows = [["スタッフ","勤務時間","基本給","担当売上","歩合","手当","控除","支給額","状態"]];
+  S.staff.forEach(st => {
+    const p = calcPay(st, m);
+    rows.push([st.name, p.hours.toFixed(1), p.base, p.sales, p.comm, p.allow, p.deduct, p.total, p.paid ? "支払済" : "未払"]);
+  });
+  dlCSV(`給与_${m}.csv`, rows);
+};
+/* ================= staff ================= */
+VIEWS.staff = function(){
+  $("main").innerHTML =
+    pageHead("スタッフ登録", "シフト・給料計算の基礎になる情報です",
+      `<button class="btn pri" onclick="addStaff()">+ スタッフを追加</button>`) +
+    `<div class="card"><div class="twrap">${S.staff.length ? `<table>
+      <tr><th>名前</th><th>役職</th><th>給与形態</th><th class="num">基本額</th><th class="num">歩合率</th><th></th></tr>
+      ${S.staff.map(st => `<tr>
+        <td style="font-weight:600">${esc(st.name)}</td>
+        <td>${esc(st.role)}</td>
+        <td>${st.payType === "monthly" ? "月給" : "時給"}</td>
+        <td class="num">${yen(st.wage)}${st.payType === "monthly" ? "/月" : "/時"}</td>
+        <td class="num">${num(st.commission)}%</td>
+        <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editStaff('${st.id}')">編集</button><button class="btn sm ghost" onclick="delStaff('${st.id}')">削除</button></td>
+      </tr>`).join("")}</table>` : `<div class="empty">スタッフが未登録です。「+ スタッフを追加」から登録してください。</div>`}</div></div>`;
+};
+function staffFields(){
+  return [
+    {key:"name", label:"名前", type:"text", required:true},
+    {key:"role", label:"役職", type:"select", options:["スタイリスト","トップスタイリスト","アシスタント","レセプション","店長","オーナー"]},
+    {key:"payType", label:"給与形態", type:"select", options:[["hourly","時給"],["monthly","月給"]], half:true},
+    {key:"wage", label:"時給/月給(円)", type:"number", required:true, min:0, half:true},
+    {key:"commission", label:"歩合率(担当売上に対する%)", type:"number", value:0, min:0, step:"0.5"}
+  ];
+}
+window.addStaff = function(){
+  openForm({ title:"スタッフを追加", fields: staffFields(),
+    onsave: v => { S.staff.push({id: uid(), ...v}); save(); toast("追加しました"); render(); } });
+};
+window.editStaff = function(id){
+  const st = S.staff.find(x => x.id === id); if(!st) return;
+  openForm({ title:"スタッフを編集", fields: staffFields(), data: st,
+    onsave: v => { Object.assign(st, v); save(); toast("更新しました"); render(); } });
+};
+window.delStaff = function(id){
+  ask("このスタッフを削除しますか?(シフト・給与の記録も表示されなくなります)", () => {
+    S.staff = S.staff.filter(x => x.id !== id); save(); toast("削除しました"); render();
+  });
+};
+/* ================= orders ================= */
+window.setOrderFilter = f => { V.orderFilter = f; render(); };
+const ORDER_STATUS = { draft:["未発注","warn"], ordered:["発注済","info"], done:["納品済","good"] };
+VIEWS.orders = function(){
+  const list = S.orders.filter(o => V.orderFilter === "all" || o.status === V.orderFilter)
+    .sort((a,b) => b.date.localeCompare(a.date));
+  const tabs = [["all","すべて"],["draft","未発注"],["ordered","発注済"],["done","納品済"]]
+    .map(([k,l]) => `<button class="btn sm${V.orderFilter === k ? " pri" : ""}" onclick="setOrderFilter('${k}')">${l}</button>`).join("");
+  $("main").innerHTML =
+    pageHead("発注管理", "薬剤・店販商品・備品の発注から納品までを管理します",
+      `<button class="btn pri" onclick="addOrder()">+ 発注を追加</button>`) +
+    `<div class="card" style="display:flex;gap:8px;flex-wrap:wrap">${tabs}</div>
+    <div class="card"><div class="twrap">${list.length ? `<table>
+      <tr><th>日付</th><th>仕入先</th><th>品名</th><th class="num">数量</th><th class="num">金額</th><th>状態</th><th></th></tr>
+      ${list.map(o => {
+        const [lbl, cls] = ORDER_STATUS[o.status] || ORDER_STATUS.draft;
+        return `<tr>
+          <td style="white-space:nowrap">${fmtDate(o.date)}</td>
+          <td>${esc(o.supplier)}</td>
+          <td>${esc(o.item)}${o.memo ? `<div style="font-size:11px;color:var(--muted)">${esc(o.memo)}</div>` : ""}</td>
+          <td class="num">${o.qty}${esc(o.unit || "")}</td>
+          <td class="num">${yen(o.amount)}</td>
+          <td><span class="chip ${cls}">${lbl}</span>${o.status === "done" && o.deliveredDate ? `<div style="font-size:11px;color:var(--muted)">${fmtDate(o.deliveredDate)}</div>` : ""}</td>
+          <td style="white-space:nowrap">
+            ${o.status === "draft" ? `<button class="btn sm" onclick="advOrder('${o.id}','ordered')">発注する</button>` : ""}
+            ${o.status === "ordered" ? `<button class="btn sm" onclick="advOrder('${o.id}','done')">納品済にする</button>` : ""}
+            ${o.status === "done" ? `<button class="btn sm ghost" onclick="bookOrder('${o.id}')" ${o.booked ? "disabled" : ""}>${o.booked ? "計上済" : "支出に計上"}</button>` : ""}
+            <button class="btn sm ghost" onclick="editOrder('${o.id}')">編集</button>
+            <button class="btn sm ghost" onclick="delOrder('${o.id}')">削除</button>
+          </td>
+        </tr>`; }).join("")}</table>` : `<div class="empty">該当する発注はありません</div>`}</div>
+      <div class="hint">在庫品目を紐づけておくと、納品時に在庫数が自動で加算されます。</div>
+    </div>`;
+};
+function orderFields(){
+  return [
+    {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
+    {key:"supplier", label:"仕入先", type:"text", required:true, half:true},
+    {key:"item", label:"品名", type:"text", required:true},
+    {key:"qty", label:"数量", type:"number", value:1, min:0, half:true},
+    {key:"unit", label:"単位(本・個など)", type:"text", value:"個", half:true},
+    {key:"amount", label:"金額(円・税込)", type:"number", min:0},
+    {key:"invId", label:"在庫品目に紐づけ(納品時に在庫へ加算)", type:"select", blank:"(紐づけない)", options: S.inv.map(i => [i.id, i.name])},
+    {key:"memo", label:"メモ", type:"text"}
+  ];
+}
+window.addOrder = function(){
+  openForm({ title:"発注を追加", fields: orderFields(),
+    onsave: v => { S.orders.push({id: uid(), status:"draft", ...v}); save(); toast("追加しました"); render(); } });
+};
+window.editOrder = function(id){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  openForm({ title:"発注を編集", fields: orderFields(), data: o,
+    onsave: v => { Object.assign(o, v); save(); toast("更新しました"); render(); } });
+};
+window.delOrder = function(id){
+  ask("この発注を削除しますか?", () => { S.orders = S.orders.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
+window.advOrder = function(id, status){
+  const o = S.orders.find(x => x.id === id); if(!o) return;
+  o.status = status;
+  if(status === "done"){
+    o.deliveredDate = todayStr();
+    if(o.invId){
+      const it = S.inv.find(i => i.id === o.invId);
+      if(it){ it.qty = num(it.qty) + num(o.qty); toast(`納品済にし、「${it.name}」の在庫を+${o.qty}しました`); }
+      else toast("納品済にしました");
+    } else toast("納品済にしました");
+  } else toast("発注済にしました");
+  save(); render();
+};
+window.bookOrder = function(id){
+  const o = S.orders.find(x => x.id === id); if(!o || o.booked) return;
+  ask(`「${o.item}」${yen(o.amount)} を支出(材料費など)に計上しますか?`, () => {
+    const it = o.invId ? S.inv.find(i => i.id === o.invId) : null;
+    const cat = it && it.category === "店販商品" ? "店販仕入" : "材料費";
+    S.tx.push({id: uid(), type:"expense", date: o.deliveredDate || todayStr(), category: cat, amount: num(o.amount), memo:`発注: ${o.item}(${o.supplier})`, staffId:""});
+    o.booked = true; save(); toast("支出に計上しました"); render();
+  });
+};
+/* ================= inventory ================= */
+VIEWS.inv = function(){
+  const list = [...S.inv].sort((a,b) => (a.category || "").localeCompare(b.category || "") || a.name.localeCompare(b.name));
+  const lowCount = list.filter(i => num(i.qty) <= num(i.minQty) && num(i.minQty) > 0).length;
+  $("main").innerHTML =
+    pageHead("在庫管理", lowCount ? `<span style="color:var(--crit);font-weight:700">${lowCount}品目が在庫不足です</span>` : "薬剤・店販商品・備品の在庫を管理します",
+      `<button class="btn pri" onclick="addInv()">+ 品目を追加</button>`) +
+    `<div class="card"><div class="twrap">${list.length ? `<table>
+      <tr><th>品名</th><th>カテゴリ</th><th class="num">在庫数</th><th></th><th class="num">最低在庫</th><th class="num">参考単価</th><th></th></tr>
+      ${list.map(i => {
+        const low = num(i.qty) <= num(i.minQty) && num(i.minQty) > 0;
+        return `<tr${low ? ' class="lowstock"' : ""}>
+          <td style="font-weight:600">${esc(i.name)}${low ? ' <span class="chip crit">要発注</span>' : ""}</td>
+          <td>${esc(i.category)}</td>
+          <td class="num" style="font-weight:700">${i.qty}${esc(i.unit || "")}</td>
+          <td style="white-space:nowrap"><button class="btn sm" onclick="invQty('${i.id}',-1)" aria-label="減らす">−</button> <button class="btn sm" onclick="invQty('${i.id}',1)" aria-label="増やす">+</button></td>
+          <td class="num">${i.minQty}</td>
+          <td class="num">${yen(i.price)}</td>
+          <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editInv('${i.id}')">編集</button><button class="btn sm ghost" onclick="delInv('${i.id}')">削除</button></td>
+        </tr>`; }).join("")}</table>` : `<div class="empty">品目が未登録です。カラー剤・シャンプー・店販商品などを登録しましょう。</div>`}</div>
+      <div class="hint">在庫数が最低在庫を下回るとダッシュボードにアラートが表示されます。</div>
+    </div>`;
+};
+function invFields(){
+  return [
+    {key:"name", label:"品名", type:"text", required:true},
+    {key:"category", label:"カテゴリ", type:"select", options: INV_CATS},
+    {key:"qty", label:"在庫数", type:"number", value:0, min:0, half:true},
+    {key:"unit", label:"単位", type:"text", value:"個", half:true},
+    {key:"minQty", label:"最低在庫(下回るとアラート)", type:"number", value:1, min:0, half:true},
+    {key:"price", label:"参考単価(円)", type:"number", value:0, min:0, half:true}
+  ];
+}
+window.addInv = function(){
+  openForm({ title:"品目を追加", fields: invFields(),
+    onsave: v => { S.inv.push({id: uid(), ...v}); save(); toast("追加しました"); render(); } });
+};
+window.editInv = function(id){
+  const i = S.inv.find(x => x.id === id); if(!i) return;
+  openForm({ title:"品目を編集", fields: invFields(), data: i,
+    onsave: v => { Object.assign(i, v); save(); toast("更新しました"); render(); } });
+};
+window.delInv = function(id){
+  ask("この品目を削除しますか?", () => { S.inv = S.inv.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
+window.invQty = function(id, d){
+  const i = S.inv.find(x => x.id === id); if(!i) return;
+  i.qty = Math.max(0, num(i.qty) + d); save(); render();
+};
+/* ================= customers ================= */
+window.custSearch = q => { V.custQ = q; renderCustList(); };
+window.openCust = id => { V.custSel = id; render(); };
+window.closeCust = () => { V.custSel = null; render(); };
+VIEWS.customers = function(){
+  if(V.custSel){ renderCustDetail(); return; }
+  $("main").innerHTML =
+    pageHead("顧客カルテ", "来店履歴・施術内容・好みを記録してリピートにつなげます",
+      `<button class="btn pri" onclick="addCust()">+ 顧客を追加</button>`) +
+    `<div class="card"><input class="searchbar" type="search" placeholder="名前・ふりがな・電話番号で検索" value="${esc(V.custQ)}" oninput="custSearch(this.value)"></div>
+    <div class="card"><div id="custlist"></div></div>`;
+  renderCustList();
+};
+function renderCustList(){
+  const q = V.custQ.trim().toLowerCase();
+  const list = S.customers.filter(c => !q || [c.name, c.kana, c.phone].some(v => (v || "").toLowerCase().includes(q)))
+    .sort((a,b) => (b.visits.at(-1)?.date || "").localeCompare(a.visits.at(-1)?.date || ""));
+  const elx = $("custlist"); if(!elx) return;
+  elx.innerHTML = list.length ? `<div class="twrap"><table>
+    <tr><th>名前</th><th>電話</th><th class="num">来店回数</th><th>最終来店</th><th>メモ</th></tr>
+    ${list.map(c => {
+      const last = c.visits.at(-1);
+      return `<tr class="rowlink" onclick="openCust('${c.id}')">
+        <td style="font-weight:600">${esc(c.name)}${c.kana ? `<div style="font-size:11px;color:var(--muted)">${esc(c.kana)}</div>` : ""}</td>
+        <td>${esc(c.phone)}</td>
+        <td class="num">${c.visits.length}回</td>
+        <td>${last ? fmtDate(last.date) : "—"}</td>
+        <td style="color:var(--ink2);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.memo)}</td>
+      </tr>`; }).join("")}</table></div>` : `<div class="empty">${q ? "該当する顧客が見つかりません" : "顧客が未登録です"}</div>`;
+}
+function renderCustDetail(){
+  const c = S.customers.find(x => x.id === V.custSel);
+  if(!c){ V.custSel = null; render(); return; }
+  const visits = [...c.visits].sort((a,b) => b.date.localeCompare(a.date));
+  const total = c.visits.reduce((a,v) => a + num(v.price), 0);
+  $("main").innerHTML =
+    pageHead(esc(c.name) + " 様", `${c.kana ? esc(c.kana) + " ・ " : ""}来店${c.visits.length}回 ・ 累計 ${yen(total)}`,
+      `<button class="btn" onclick="closeCust()">‹ 一覧へ戻る</button><button class="btn" onclick="editCust('${c.id}')">情報を編集</button><button class="btn pri" onclick="addVisit('${c.id}')">+ 来店を記録</button>`) +
+    `<div class="grid2">
+      <div class="card"><h2>基本情報</h2>
+        <div class="twrap"><table>
+          <tr><td style="color:var(--muted);width:96px">電話</td><td>${esc(c.phone) || "—"}</td></tr>
+          <tr><td style="color:var(--muted)">誕生日</td><td>${c.birthday ? esc(c.birthday) : "—"}</td></tr>
+          <tr><td style="color:var(--muted)">メモ</td><td>${esc(c.memo) || "—"}</td></tr>
+        </table></div>
+      </div>
+      <div class="card"><h2>来店履歴 <span class="h2-sub">${visits.length}件</span></h2>
+        ${visits.length ? visits.map(v => `<div class="visit-item">
+          <div class="v-date">${fmtDate(v.date)} <span style="color:var(--muted);font-weight:400">${esc(staffName(v.staffId))}</span> <span style="float:right;font-variant-numeric:tabular-nums">${yen(v.price)}</span></div>
+          <div class="v-body">${esc(v.menu)}${v.note ? " — " + esc(v.note) : ""}</div>
+          <button class="btn sm ghost" onclick="delVisit('${c.id}','${v.id}')">削除</button>
+        </div>`).join("") : `<div class="empty">来店記録はまだありません</div>`}
+      </div>
+    </div>`;
+}
+function custFields(){
+  return [
+    {key:"name", label:"名前", type:"text", required:true, half:true},
+    {key:"kana", label:"ふりがな", type:"text", half:true},
+    {key:"phone", label:"電話番号", type:"tel", half:true},
+    {key:"birthday", label:"誕生日", type:"date", half:true},
+    {key:"memo", label:"メモ(髪質・好み・アレルギーなど)", type:"textarea"}
+  ];
+}
+window.addCust = function(){
+  openForm({ title:"顧客を追加", fields: custFields(),
+    onsave: v => { S.customers.push({id: uid(), visits: [], ...v}); save(); toast("追加しました"); render(); } });
+};
+window.editCust = function(id){
+  const c = S.customers.find(x => x.id === id); if(!c) return;
+  window._delCust = () => { closeModal(); ask("この顧客とカルテを削除しますか?", () => { S.customers = S.customers.filter(x => x.id !== id); V.custSel = null; save(); toast("削除しました"); render(); }); };
+  openForm({ title:"顧客情報を編集", fields: custFields(), data: c,
+    onsave: v => { Object.assign(c, v); save(); toast("更新しました"); render(); } });
+  document.querySelector(".m-foot").insertAdjacentHTML("afterbegin", `<button type="button" class="btn danger" style="margin-right:auto" onclick="_delCust()">削除</button>`);
+};
+window.addVisit = function(custId){
+  const c = S.customers.find(x => x.id === custId); if(!c) return;
+  openForm({ title: `${c.name} 様の来店を記録`,
+    fields: [
+      {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
+      {key:"price", label:"金額(円)", type:"number", min:0, half:true},
+      {key:"menu", label:"メニュー", type:"select", options: INCOME_CATS.slice(0,-1)},
+      {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
+      {key:"note", label:"施術メモ(薬剤・カラーレシピなど)", type:"textarea"},
+      {key:"book", label:"売上にも計上する", type:"select", options:[["yes","はい(収支管理に収入を追加)"],["no","いいえ"]]}
+    ],
+    onsave: v => {
+      const {book, ...visit} = v;
+      c.visits.push({id: uid(), ...visit});
+      if(book === "yes" && num(visit.price) > 0)
+        S.tx.push({id: uid(), type:"income", date: visit.date, category: visit.menu, amount: num(visit.price), memo: `${c.name}様`, staffId: visit.staffId});
+      save(); toast("来店を記録しました"); render();
+    } });
+};
+window.delVisit = function(custId, visitId){
+  const c = S.customers.find(x => x.id === custId); if(!c) return;
+  ask("この来店記録を削除しますか?", () => { c.visits = c.visits.filter(v => v.id !== visitId); save(); toast("削除しました"); render(); });
+};
+/* ================= appointments ================= */
+window.apptNav = d => { V.apptDate = addDays(V.apptDate, d); render(); };
+window.apptToday = () => { V.apptDate = todayStr(); render(); };
+const APPT_STATUS = { open:["予約中","info"], done:["来店済","good"], cancel:["キャンセル","mut"] };
+VIEWS.appts = function(){
+  const d = V.apptDate;
+  const list = S.appts.filter(a => a.date === d).sort((a,b) => a.time.localeCompare(b.time));
+  $("main").innerHTML =
+    pageHead("予約管理", "来店処理をすると売上と顧客カルテに自動で反映されます",
+      `<span class="mnav"><button class="btn sm" onclick="apptNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="apptNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="apptToday()">今日</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
+    `<div class="card"><div class="twrap">${list.length ? `<table>
+      <tr><th>時刻</th><th>お客様</th><th>メニュー</th><th>担当</th><th class="num">予定金額</th><th>状態</th><th></th></tr>
+      ${list.map(a => {
+        const [lbl, cls] = APPT_STATUS[a.status] || APPT_STATUS.open;
+        return `<tr>
+          <td style="font-weight:700;font-variant-numeric:tabular-nums">${esc(a.time)}</td>
+          <td>${esc(a.name)}</td>
+          <td>${esc(a.menu)}${a.memo ? `<div style="font-size:11px;color:var(--muted)">${esc(a.memo)}</div>` : ""}</td>
+          <td>${esc(staffName(a.staffId))}</td>
+          <td class="num">${a.price ? yen(a.price) : "—"}</td>
+          <td><span class="chip ${cls}">${lbl}</span></td>
+          <td style="white-space:nowrap">
+            ${a.status === "open" ? `<button class="btn sm pri" onclick="checkinAppt('${a.id}')">来店処理</button><button class="btn sm ghost" onclick="cancelAppt('${a.id}')">キャンセル</button>` : ""}
+            <button class="btn sm ghost" onclick="editAppt('${a.id}')">編集</button>
+            <button class="btn sm ghost" onclick="delAppt('${a.id}')">削除</button>
+          </td>
+        </tr>`; }).join("")}</table>` : `<div class="empty">${fmtDate(d)}の予約はありません</div>`}</div></div>`;
+};
+function apptFields(){
+  return [
+    {key:"date", label:"日付", type:"date", value: V.apptDate, required:true, half:true},
+    {key:"time", label:"時刻", type:"time", value:"10:00", required:true, half:true},
+    {key:"name", label:"お客様名", type:"text", required:true},
+    {key:"menu", label:"メニュー", type:"select", options: INCOME_CATS.slice(0,-1)},
+    {key:"staffId", label:"担当", type:"select", blank:"(未定)", options: S.staff.map(s => [s.id, s.name])},
+    {key:"price", label:"予定金額(円)", type:"number", min:0, half:true},
+    {key:"memo", label:"メモ", type:"text", half:true}
+  ];
+}
+window.addAppt = function(){
+  openForm({ title:"予約を追加", fields: apptFields(),
+    onsave: v => { S.appts.push({id: uid(), status:"open", ...v}); save(); toast("予約を追加しました"); render(); } });
+};
+window.editAppt = function(id){
+  const a = S.appts.find(x => x.id === id); if(!a) return;
+  openForm({ title:"予約を編集", fields: apptFields(), data: a,
+    onsave: v => { Object.assign(a, v); save(); toast("更新しました"); render(); } });
+};
+window.delAppt = function(id){
+  ask("この予約を削除しますか?", () => { S.appts = S.appts.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
+window.cancelAppt = function(id){
+  const a = S.appts.find(x => x.id === id); if(!a) return;
+  a.status = "cancel"; save(); toast("キャンセルにしました"); render();
+};
+window.checkinAppt = function(id){
+  const a = S.appts.find(x => x.id === id); if(!a) return;
+  openForm({ title: `${a.name} 様の来店処理(会計)`,
+    fields: [
+      {key:"amount", label:"会計金額(円)", type:"number", value: a.price || "", required:true, min:0},
+      {key:"category", label:"メニュー(売上カテゴリ)", type:"select", options: INCOME_CATS, value: a.menu},
+      {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name]), value: a.staffId},
+      {key:"note", label:"施術メモ(カルテに記録)", type:"textarea"}
+    ], saveLabel:"会計を確定",
+    onsave: v => {
+      a.status = "done";
+      S.tx.push({id: uid(), type:"income", date: a.date, category: v.category, amount: v.amount, memo: `${a.name}様`, staffId: v.staffId});
+      let c = S.customers.find(x => x.name === a.name);
+      if(!c){ c = {id: uid(), name: a.name, kana:"", phone:"", birthday:"", memo:"", visits: []}; S.customers.push(c); }
+      c.visits.push({id: uid(), date: a.date, menu: v.category, staffId: v.staffId, price: v.amount, note: v.note});
+      save(); toast("会計を記録し、カルテに反映しました"); render();
+    } });
+};
+/* ================= settings ================= */
+VIEWS.settings = function(){
+  let bytes = 0;
+  try{ bytes = (localStorage.getItem(LS_KEY) || "").length * 2; }catch(e){}
+  const kb = (bytes/1024).toFixed(0);
+  $("main").innerHTML =
+    pageHead("設定・バックアップ", "") +
+    `<div class="card"><h2>店舗設定</h2>
+      <div class="f-row" style="max-width:320px"><label for="set-name">店名</label>
+      <input id="set-name" value="${esc(S.settings.name)}"></div>
+      <button class="btn pri" onclick="saveSettings()">保存</button>
+    </div>
+    <div class="card"><h2>バックアップ</h2>
+      <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">
+        データはこの端末・ブラウザの中(localStorage)だけに保存されます。機種変更やブラウザのデータ削除に備えて、定期的にバックアップファイルを保存してください。現在の使用量: 約${kb}KB。</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn pri" onclick="exportBackup()">バックアップを書き出す(JSON)</button>
+        <label class="btn" style="cursor:pointer">バックアップを読み込む<input type="file" accept=".json,application/json" style="display:none" onchange="importBackup(this)"></label>
+      </div>
+    </div>
+    <div class="card"><h2>お試し</h2>
+      <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">動作を確認したいときはサンプルデータを投入できます(既存データはそのまま残ります)。</p>
+      <button class="btn" onclick="seedSample()">サンプルデータを投入</button>
+    </div>
+    <div class="card"><h2 style="color:var(--crit)">データの初期化</h2>
+      <button class="btn danger" onclick="wipeAll()">全データを削除</button>
+    </div>`;
+};
+window.saveSettings = function(){ S.settings.name = $("set-name").value || "マイサロン"; save(); toast("保存しました"); render(); };
+window.exportBackup = function(){
+  dlText(`salon-backup_${todayStr()}.json`, JSON.stringify(S, null, 1), "application/json");
+  toast("バックアップを書き出しました");
+};
+window.importBackup = function(input){
+  const file = input.files && input.files[0]; if(!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try{
+      const d = JSON.parse(rd.result);
+      if(!d || typeof d !== "object" || !("tx" in d)) throw 0;
+      ask("現在のデータをバックアップの内容で置き換えますか?", () => {
+        S = Object.assign(structuredClone(DEFAULTS), d); save(); toast("読み込みました"); render();
+      });
+    }catch(e){ toast("読み込めませんでした。バックアップファイルを確認してください"); }
+  };
+  rd.readAsText(file);
+};
+window.wipeAll = function(){
+  ask("すべてのデータを完全に削除します。よろしいですか?(元に戻せません)", () => {
+    S = structuredClone(DEFAULTS); save(); toast("初期化しました"); render();
+  });
+};
+window.seedSample = function(){
+  const m = thisMonth(), pm = addMonths(m, -1), t = todayStr();
+  const s1 = uid(), s2 = uid(), c1 = uid(), i1 = uid(), i2 = uid();
+  S.staff.push(
+    {id: s1, name:"佐藤 美咲", role:"スタイリスト", payType:"monthly", wage:260000, commission:5},
+    {id: s2, name:"田中 健", role:"アシスタント", payType:"hourly", wage:1200, commission:0});
+  S.customers.push({id: c1, name:"山本 花子", kana:"やまもと はなこ", phone:"090-0000-0000", birthday:"1990-04-12",
+    memo:"細毛・カラーはアッシュ系が好み", visits:[{id: uid(), date: pm + "-15", menu:"カラー", staffId: s1, price:9800, note:"8Levアッシュ"}]});
+  S.inv.push(
+    {id: i1, name:"カラー剤 アッシュ8", category:"施術材料", qty:2, unit:"本", minQty:3, price:800},
+    {id: i2, name:"シャンプー(店販)", category:"店販商品", qty:10, unit:"本", minQty:5, price:1600});
+  S.tx.push(
+    {id: uid(), type:"income", date: t, category:"カット", amount:4950, memo:"サンプル", staffId: s1},
+    {id: uid(), type:"income", date: t, category:"カラー", amount:9800, memo:"山本様", staffId: s1},
+    {id: uid(), type:"income", date: pm + "-15", category:"カラー", amount:9800, memo:"山本様", staffId: s1},
+    {id: uid(), type:"income", date: pm + "-20", category:"パーマ", amount:12000, memo:"", staffId: s1},
+    {id: uid(), type:"expense", date: pm + "-25", category:"家賃", amount:150000, memo:"", staffId:""},
+    {id: uid(), type:"expense", date: t, category:"材料費", amount:12400, memo:"ディーラー仕入", staffId:""});
+  S.shifts.push(
+    {id: uid(), staffId: s1, date: t, start:"09:30", end:"19:00", brk:60, note:""},
+    {id: uid(), staffId: s2, date: t, start:"10:00", end:"18:00", brk:60, note:""});
+  S.appts.push(
+    {id: uid(), date: t, time:"14:00", name:"山本 花子", customerId: c1, menu:"カット", staffId: s1, price:4950, status:"open", memo:"リタッチ相談"},
+    {id: uid(), date: t, time:"16:30", name:"新規 太郎", menu:"カット", staffId: s2, price:3800, status:"open", memo:""});
+  S.orders.push({id: uid(), date: t, supplier:"ビューティーディーラーA", item:"カラー剤 アッシュ8", qty:6, unit:"本", amount:4800, memo:"", status:"draft", invId: i1});
+  save(); toast("サンプルデータを投入しました"); render();
+};
+/* ================= boot ================= */
+render();
+</script>
+</body>
+</html>
