@@ -254,14 +254,16 @@ const LS_KEY = "salon-mgr-v1";
 const DEFAULTS = {
   settings: { name: "マイサロン", target: 0 }, // target: 月間売上目標(円)。旧バックアップにはこのキーが無いため利用側は num()>0 で判定する
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
-  tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId}
+  tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(支出のみ'10'|'8'|'0')}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
   shifts: [],     // {id,staffId,date,start,end,brk,note}
   payAdj: {},     // key `${staffId}_${month}` -> {allow,deduct,memo,paid,booked}
   orders: [],     // {id,date,supplier,item,qty,unit,amount,memo,status,invId,deliveredDate,booked}
-  inv: [],        // {id,name,category,qty,unit,minQty,price}
-  customers: [],  // {id,name,kana,phone,birthday,memo,visits:[{id,date,menu,staffId,price,note}]}
-  appts: []       // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo}
+  inv: [],        // {id,name,category,qty,unit,minQty,price,menuCat,useQty}
+  customers: [],  // {id,name,kana,phone,birthday,memo,visits:[{id,date,menu,staffId,price,note,img}]}
+  appts: [],      // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo,dur,nominated,nextApptId}
+  closings: {},   // key 'YYYY-MM-DD' -> {float,actual,memo,closed} レジ締め
+  tickets: []     // {id,customerId,name,total,used,price,date,memo} 回数券
 };
 let S = loadState();
 function loadState(){
@@ -301,6 +303,8 @@ function toast(msg){
 const INCOME_CATS = ["カット","カラー","パーマ","縮毛矯正","トリートメント","ヘッドスパ","セット・着付け","店販(商品売上)","その他収入"];
 const EXPENSE_CATS = ["材料費","店販仕入","家賃","水道光熱費","通信費","広告宣伝費","消耗品費","人件費","外注費","交通費","会議・交際費","研修費","修繕費","リース料","保険料","支払手数料","雑費"];
 const INV_CATS = ["施術材料","店販商品","備品・消耗品"];
+const PAY_METHODS = ["現金","カード","QR決済","その他"];
+const TAX_OPTS = [["10","10%(標準)"],["8","8%(軽減)"],["0","対象外(非課税・不課税)"]];
 /* ================= modal / forms ================= */
 let _form = null, _formImg = {};
 function openModal(html){ $("modal-root").innerHTML = `<div class="m-back" onclick="closeModal()"></div><div class="m-box">${html}</div>`; $("modal-root").classList.add("open"); }
@@ -443,6 +447,48 @@ function staffSalesEntries(m){
   });
   return Object.entries(g).sort((a,b) => b[1] - a[1]);
 }
+function daysDiff(a, b){ const [y1,m1,d1] = a.split("-").map(Number), [y2,m2,d2] = b.split("-").map(Number); return Math.round((new Date(y2,m2-1,d2) - new Date(y1,m1-1,d1)) / 86400000); }
+/* 指名率・次回予約率の分母分子(来店処理済みの予約から算出) */
+function apptStats(m){
+  const done = S.appts.filter(a => a.date && a.date.startsWith(m) && a.status === "done");
+  const withStaff = done.filter(a => a.staffId);
+  return { done: done.length, withStaff: withStaff.length,
+    nom: withStaff.filter(a => a.nominated).length,
+    next: done.filter(a => a.nextApptId).length };
+}
+function lostCustomers(days){
+  const t = todayStr();
+  return S.customers.map(c => {
+    const last = (c.visits || []).reduce((a,v) => (v.date && v.date > a) ? v.date : a, "");
+    return { c, last, gap: last ? daysDiff(last, t) : null };
+  }).filter(x => x.last && x.gap >= days).sort((a,b) => b.gap - a.gap);
+}
+function birthdayList(m){
+  const mo = m.slice(5);
+  return S.customers.filter(c => c.birthday && c.birthday.slice(5,7) === mo)
+    .sort((a,b) => a.birthday.slice(8).localeCompare(b.birthday.slice(8)));
+}
+/* メニューに紐づいた在庫を売上記録時に自動減算。減算した品名を返す(記録時のみ。編集・削除では戻らない) */
+function consumeInv(category){
+  const used = [];
+  S.inv.forEach(i => {
+    if(i.menuCat && i.menuCat === category){
+      i.qty = Math.max(0, num(i.qty) - (num(i.useQty) > 0 ? num(i.useQty) : 1));
+      used.push(i.name);
+    }
+  });
+  return used;
+}
+/* 同一担当・同日の時間帯重複(status openのみ対象)。所要時間未設定は60分扱い */
+function apptConflict(v, excludeId){
+  if(!v.staffId) return null;
+  const s = toMin(v.time), e = s + (num(v.dur) > 0 ? num(v.dur) : 60);
+  return S.appts.find(a => {
+    if(a.id === excludeId || a.date !== v.date || (a.staffId || "") !== v.staffId || a.status !== "open") return false;
+    const as = toMin(a.time), ae = as + (num(a.dur) > 0 ? num(a.dur) : 60);
+    return s < ae && as < e;
+  }) || null;
+}
 function hbarHtml(entries, total, color){
   const max = Math.max(1, ...entries.map(e => e[1]));
   return `<div class="hbar">` + entries.map(([label, v]) => {
@@ -459,8 +505,9 @@ function breakdownCardsHtml(m){
   const expE = topN(groupSum(txInMonth(m).filter(t => t.type === "expense"), t => t.category || "未分類"), 5);
   const vs = visitStats(m);
   const seen = vs.nw + vs.rep;
+  const as = apptStats(m);
   const foot = s.inc > 0
-    ? `<div class="hb-foot">店販比率 <strong>${Math.round(s.retail / s.inc * 100)}%</strong> ・ リピート率 <strong>${seen ? Math.round(vs.rep / seen * 100) + "%" : "—(カルテ記録なし)"}</strong>${seen ? `(カルテ 新規${vs.nw}・再来${vs.rep})` : ""}</div>`
+    ? `<div class="hb-foot">店販比率 <strong>${Math.round(s.retail / s.inc * 100)}%</strong> ・ リピート率 <strong>${seen ? Math.round(vs.rep / seen * 100) + "%" : "—(カルテ記録なし)"}</strong>${seen ? `(カルテ 新規${vs.nw}・再来${vs.rep})` : ""}<br>指名率 <strong>${as.withStaff ? Math.round(as.nom / as.withStaff * 100) + "%" : "—"}</strong> ・ 次回予約率 <strong>${as.done ? Math.round(as.next / as.done * 100) + "%" : "—"}</strong>(来店処理した予約${as.done}件から算出)</div>`
     : "";
   return `<div class="grid2" style="margin-bottom:16px">
     <div class="card"><h2>スタッフ別売上 <span class="h2-sub">${fmtMonth(m)}</span></h2>
@@ -493,6 +540,7 @@ const NAV = [
   {sec:"日々の業務"},
   {id:"appts", label:"予約管理"},
   {id:"money", label:"収支管理"},
+  {id:"closing", label:"レジ締め"},
   {id:"receipts", label:"領収書管理"},
   {sec:"スタッフ"},
   {id:"shifts", label:"シフト管理"},
@@ -503,6 +551,8 @@ const NAV = [
   {id:"inv", label:"在庫管理"},
   {sec:"顧客"},
   {id:"customers", label:"顧客カルテ"},
+  {id:"follow", label:"フォローリスト"},
+  {id:"tickets", label:"回数券"},
   {sec:"その他"},
   {id:"settings", label:"設定・バックアップ"}
 ];
@@ -510,6 +560,8 @@ let cur = "dash";
 const V = {}; // view state
 V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth(); V.reportMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
+V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
+V.closeDate = todayStr(); V.lostDays = 60;
 V.orderFilter = "all"; V.custSel = null; V.custQ = "";
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
 function render(){
@@ -572,6 +624,8 @@ VIEWS.dash = function(){
   const alerts = [];
   low.forEach(i => alerts.push(`<div class="alertline"><span class="chip crit">在庫不足</span>${esc(i.name)}(残り ${i.qty}${esc(i.unit || "")} / 最低 ${i.minQty})</div>`));
   pendingOrders.filter(o => o.status === "draft").forEach(o => alerts.push(`<div class="alertline"><span class="chip warn">未発注</span>${esc(o.item)}(${esc(o.supplier)})</div>`));
+  const lost = lostCustomers(60);
+  if(lost.length) alerts.push(`<div class="alertline"><span class="chip info">フォロー</span>${lost.length}名が60日以上未来店 <button class="btn sm" onclick="go('follow')">確認 ›</button></div>`);
   const hasData = S.tx.length > 0;
   $("main").innerHTML =
     pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
@@ -788,12 +842,13 @@ VIEWS.money = function(){
     </div>
     <div class="card"><h2>明細 <span class="h2-sub">${list.length}件</span></h2>
       <div class="twrap">${list.length ? `<table>
-        <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>担当</th><th>メモ</th><th></th></tr>
+        <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>支払/税</th><th>担当</th><th>メモ</th><th></th></tr>
         ${list.map(t => `<tr>
           <td style="white-space:nowrap">${fmtDate(t.date)}</td>
           <td><span class="chip ${t.type === "income" ? "info" : "mut"}">${t.type === "income" ? "収入" : "支出"}</span></td>
           <td>${esc(t.category)}</td>
           <td class="num" style="font-weight:600">${yen(t.amount)}</td>
+          <td style="font-size:12px;color:var(--ink2);white-space:nowrap">${t.type === "income" ? esc(t.pay || "現金") : (t.taxRate === "0" ? "対象外" : `税${esc(t.taxRate || "10")}%`)}</td>
           <td>${t.staffId ? esc(staffName(t.staffId)) : ""}</td>
           <td style="color:var(--ink2);max-width:220px">${esc(t.memo)}</td>
           <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editTx('${t.id}')">編集</button><button class="btn sm ghost" onclick="delTx('${t.id}')">削除</button></td>
@@ -806,13 +861,20 @@ function txFields(type){
     {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
     {key:"amount", label:"金額(円)", type:"number", required:true, min:0, half:true},
     {key:"category", label:"カテゴリ", type:"select", options: type === "income" ? INCOME_CATS : EXPENSE_CATS},
+    ...(type === "income"
+      ? [{key:"pay", label:"支払方法(レジ締めの集計に使用)", type:"select", options: PAY_METHODS}]
+      : [{key:"taxRate", label:"税区分(申告用CSVに出力)", type:"select", options: TAX_OPTS}]),
     {key:"staffId", label: type === "income" ? "担当スタッフ(歩合計算に使用)" : "関連スタッフ", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
     {key:"memo", label:"メモ", type:"text", placeholder: type === "income" ? "お客様名・メニューなど" : "支払先など"}
   ];
 }
 window.addTx = function(type){
   openForm({ title: type === "income" ? "収入を記録" : "支出を記録", fields: txFields(type),
-    onsave: v => { S.tx.push({id: uid(), type, ...v}); save(); toast("記録しました"); render(); } });
+    onsave: v => {
+      S.tx.push({id: uid(), type, ...v});
+      const used = type === "income" ? consumeInv(v.category) : [];
+      save(); toast(used.length ? `記録しました(在庫減算: ${used.join("、")})` : "記録しました"); render();
+    } });
 };
 window.editTx = function(id){
   const t = S.tx.find(x => x.id === id); if(!t) return;
@@ -824,9 +886,12 @@ window.delTx = function(id){
 };
 window.exportTxCsv = function(){
   const m = V.moneyMonth;
-  const rows = [["日付","区分","カテゴリ","金額","担当","メモ"]];
+  const rows = [["日付","区分","カテゴリ","金額","支払方法","税区分","担当","メモ"]];
   txInMonth(m).sort((a,b) => a.date.localeCompare(b.date)).forEach(t =>
-    rows.push([t.date, t.type === "income" ? "収入" : "支出", t.category, t.amount, t.staffId ? staffName(t.staffId) : "", t.memo]));
+    rows.push([t.date, t.type === "income" ? "収入" : "支出", t.category, t.amount,
+      t.type === "income" ? (t.pay || "現金") : "",
+      t.type === "expense" ? (t.taxRate === "0" ? "対象外" : (t.taxRate || "10") + "%") : "",
+      t.staffId ? staffName(t.staffId) : "", t.memo]));
   dlCSV(`収支_${m}.csv`, rows);
 };
 /* ================= receipts ================= */
@@ -975,7 +1040,7 @@ VIEWS.payroll = function(){
   }).join("");
   $("main").innerHTML =
     pageHead("給料管理", "シフトの勤務時間と担当売上から自動計算します",
-      `${monthNav(m, "payNav")}<button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
+      `${monthNav(m, "payNav")}<button class="btn" onclick="openPayslips()">給与明細(印刷)</button><button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
     (S.staff.length
       ? `<div class="card"><div class="twrap"><table>
           <tr><th>スタッフ</th><th class="num">勤務時間</th><th class="num">基本給</th><th class="num">歩合</th><th class="num">手当</th><th class="num">控除</th><th class="num">支給額</th><th>状態</th><th></th></tr>
@@ -1159,7 +1224,7 @@ VIEWS.inv = function(){
           <td class="num">${yen(i.price)}</td>
           <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editInv('${i.id}')">編集</button><button class="btn sm ghost" onclick="delInv('${i.id}')">削除</button></td>
         </tr>`; }).join("")}</table>` : `<div class="empty">品目が未登録です。カラー剤・シャンプー・店販商品などを登録しましょう。</div>`}</div>
-      <div class="hint">在庫数が最低在庫を下回るとダッシュボードにアラートが表示されます。</div>
+      <div class="hint">在庫数が最低在庫を下回るとダッシュボードにアラートが表示されます。メニューに紐づけた品目は、該当メニューの売上を記録した時点で自動減算されます(記録の編集・削除では戻りません)。</div>
     </div>`;
 };
 function invFields(){
@@ -1169,7 +1234,9 @@ function invFields(){
     {key:"qty", label:"在庫数", type:"number", value:0, min:0, half:true},
     {key:"unit", label:"単位", type:"text", value:"個", half:true},
     {key:"minQty", label:"最低在庫(下回るとアラート)", type:"number", value:1, min:0, half:true},
-    {key:"price", label:"参考単価(円)", type:"number", value:0, min:0, half:true}
+    {key:"price", label:"参考単価(円)", type:"number", value:0, min:0, half:true},
+    {key:"menuCat", label:"メニューに紐づけ(該当メニューの売上記録時に自動減算)", type:"select", blank:"(紐づけない)", options: INCOME_CATS.slice(0,-1)},
+    {key:"useQty", label:"1回あたり使用量", type:"number", value:1, min:0, step:"0.1"}
   ];
 }
 window.addInv = function(){
@@ -1229,15 +1296,18 @@ function renderCustDetail(){
     `<div class="grid2">
       <div class="card"><h2>基本情報</h2>
         <div class="twrap"><table>
-          <tr><td style="color:var(--muted);width:96px">電話</td><td>${esc(c.phone) || "—"}</td></tr>
+          <tr><td style="color:var(--muted);width:96px">電話</td><td>${c.phone ? `<a href="tel:${esc(c.phone)}" style="color:var(--info)">${esc(c.phone)}</a>` : "—"}</td></tr>
           <tr><td style="color:var(--muted)">誕生日</td><td>${c.birthday ? esc(c.birthday) : "—"}</td></tr>
           <tr><td style="color:var(--muted)">メモ</td><td>${esc(c.memo) || "—"}</td></tr>
+          <tr><td style="color:var(--muted)">回数券</td><td>${(S.tickets.filter(t => t.customerId === c.id && num(t.total) - num(t.used) > 0).map(t =>
+            `${esc(t.name)} 残${num(t.total) - num(t.used)}回 <button class="btn sm" onclick="useTicket('${t.id}')">1回使う</button>`).join("<br>")) || "—"}</td></tr>
         </table></div>
       </div>
       <div class="card"><h2>来店履歴 <span class="h2-sub">${visits.length}件</span></h2>
         ${visits.length ? visits.map(v => `<div class="visit-item">
           <div class="v-date">${fmtDate(v.date)} <span style="color:var(--muted);font-weight:400">${esc(staffName(v.staffId))}</span> <span style="float:right;font-variant-numeric:tabular-nums">${yen(v.price)}</span></div>
           <div class="v-body">${esc(v.menu)}${v.note ? " — " + esc(v.note) : ""}</div>
+          ${v.img ? `<img src="${v.img}" class="rcpt-thumb" style="margin-top:4px" alt="施術写真" onclick="viewVisitImg('${c.id}','${v.id}')">` : ""}
           <button class="btn sm ghost" onclick="delVisit('${c.id}','${v.id}')">削除</button>
         </div>`).join("") : `<div class="empty">来店記録はまだありません</div>`}
       </div>
@@ -1272,13 +1342,14 @@ window.addVisit = function(custId){
       {key:"menu", label:"メニュー", type:"select", options: INCOME_CATS.slice(0,-1)},
       {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
       {key:"note", label:"施術メモ(薬剤・カラーレシピなど)", type:"textarea"},
+      {key:"img", label:"施術写真", type:"image"},
       {key:"book", label:"売上にも計上する", type:"select", options:[["yes","はい(収支管理に収入を追加)"],["no","いいえ"]]}
     ],
     onsave: v => {
       const {book, ...visit} = v;
       c.visits.push({id: uid(), ...visit});
       if(book === "yes" && num(visit.price) > 0)
-        S.tx.push({id: uid(), type:"income", date: visit.date, category: visit.menu, amount: num(visit.price), memo: `${c.name}様`, staffId: visit.staffId});
+        S.tx.push({id: uid(), type:"income", date: visit.date, category: visit.menu, amount: num(visit.price), memo: `${c.name}様`, staffId: visit.staffId, pay:"現金"});
       save(); toast("来店を記録しました"); render();
     } });
 };
@@ -1289,20 +1360,48 @@ window.delVisit = function(custId, visitId){
 /* ================= appointments ================= */
 window.apptNav = d => { V.apptDate = addDays(V.apptDate, d); render(); };
 window.apptToday = () => { V.apptDate = todayStr(); render(); };
+window.setApptMode = mode => { V.apptMode = mode; render(); };
+window.apptWeekNav = d => { V.apptWeek = addDays(V.apptWeek, d * 7); render(); };
+window.apptWeekToday = () => { V.apptWeek = mondayOf(todayStr()); render(); };
 const APPT_STATUS = { open:["予約中","info"], done:["来店済","good"], cancel:["キャンセル","mut"] };
+function apptModeBtns(){
+  return `<button class="btn sm${V.apptMode !== "week" ? " pri" : ""}" onclick="setApptMode('day')">日</button><button class="btn sm${V.apptMode === "week" ? " pri" : ""}" onclick="setApptMode('week')">週</button>`;
+}
+function renderApptWeek(){
+  const days = Array.from({length:7}, (_,i) => addDays(V.apptWeek, i));
+  const tday = todayStr();
+  const head = days.map(d => `<th${d === tday ? ' class="today-col"' : ""} style="min-width:96px;text-align:center">${fmtDate(d)}</th>`).join("");
+  const rows = [...S.staff.map(st => [st.id, st.name]), ["", "担当未定"]].map(([sid, name]) => {
+    const cells = days.map(d => {
+      const list = S.appts.filter(a => a.date === d && (a.staffId || "") === sid).sort((a,b) => a.time.localeCompare(b.time));
+      return `<td${d === tday ? ' class="today-col"' : ""} style="vertical-align:top;text-align:center">${list.map(a => {
+        const st2 = a.status === "done" ? "background:var(--good-chip);color:var(--good)"
+          : a.status === "cancel" ? "background:var(--surface2);color:var(--muted);text-decoration:line-through" : "";
+        return `<button class="shiftchip" style="${st2}" onclick="editAppt('${a.id}')" title="クリックで編集">${esc(a.time)} ${esc(a.name)}</button>`;
+      }).join("")}</td>`;
+    }).join("");
+    return `<tr><td style="font-weight:600;white-space:nowrap">${esc(name)}</td>${cells}</tr>`;
+  }).join("");
+  $("main").innerHTML =
+    pageHead("予約管理", "週表示: 予約をクリックすると編集できます",
+      `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptWeekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="apptWeekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="apptWeekToday()">今週</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
+    `<div class="card"><div class="twrap"><table><tr><th>担当</th>${head}</tr>${rows}</table></div>
+      <div class="hint">同じ担当で時間帯が重なる予約は、登録・編集時に警告が表示されます。</div></div>`;
+}
 VIEWS.appts = function(){
+  if(V.apptMode === "week"){ renderApptWeek(); return; }
   const d = V.apptDate;
   const list = S.appts.filter(a => a.date === d).sort((a,b) => a.time.localeCompare(b.time));
   $("main").innerHTML =
     pageHead("予約管理", "来店処理をすると売上と顧客カルテに自動で反映されます",
-      `<span class="mnav"><button class="btn sm" onclick="apptNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="apptNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="apptToday()">今日</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
+      `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="apptNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="apptToday()">今日</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
     `<div class="card"><div class="twrap">${list.length ? `<table>
       <tr><th>時刻</th><th>お客様</th><th>メニュー</th><th>担当</th><th class="num">予定金額</th><th>状態</th><th></th></tr>
       ${list.map(a => {
         const [lbl, cls] = APPT_STATUS[a.status] || APPT_STATUS.open;
         return `<tr>
-          <td style="font-weight:700;font-variant-numeric:tabular-nums">${esc(a.time)}</td>
-          <td>${esc(a.name)}</td>
+          <td style="font-weight:700;font-variant-numeric:tabular-nums">${esc(a.time)}${num(a.dur) ? `<div style="font-size:11px;color:var(--muted);font-weight:400">${num(a.dur)}分</div>` : ""}</td>
+          <td>${esc(a.name)}${a.nominated ? ' <span class="chip info">指名</span>' : ""}${a.nextApptId ? ' <span class="chip good">次回予約済</span>' : ""}</td>
           <td>${esc(a.menu)}${a.memo ? `<div style="font-size:11px;color:var(--muted)">${esc(a.memo)}</div>` : ""}</td>
           <td>${esc(staffName(a.staffId))}</td>
           <td class="num">${a.price ? yen(a.price) : "—"}</td>
@@ -1321,18 +1420,31 @@ function apptFields(){
     {key:"name", label:"お客様名", type:"text", required:true},
     {key:"menu", label:"メニュー", type:"select", options: INCOME_CATS.slice(0,-1)},
     {key:"staffId", label:"担当", type:"select", blank:"(未定)", options: S.staff.map(s => [s.id, s.name])},
+    {key:"dur", label:"所要時間(分)", type:"number", value:60, min:0, half:true},
+    {key:"nominated", label:"指名", type:"select", options:[["","フリー"],["1","指名"]], half:true},
     {key:"price", label:"予定金額(円)", type:"number", min:0, half:true},
     {key:"memo", label:"メモ", type:"text", half:true}
   ];
 }
+/* 保存前にダブルブッキングを検知。重複時は確認してから保存する */
+function saveApptWithCheck(v, id){
+  const doSave = () => {
+    if(id){ const a = S.appts.find(x => x.id === id); if(a) Object.assign(a, v); }
+    else S.appts.push({id: uid(), status:"open", ...v});
+    save(); toast(id ? "更新しました" : "予約を追加しました"); render();
+  };
+  const c = apptConflict(v, id);
+  if(c) ask(`${staffName(v.staffId)}は ${fmtDate(c.date)} ${c.time}〜「${c.name}様」(${num(c.dur) || 60}分)の予約と時間帯が重複します。このまま保存しますか?`, doSave);
+  else doSave();
+}
 window.addAppt = function(){
   openForm({ title:"予約を追加", fields: apptFields(),
-    onsave: v => { S.appts.push({id: uid(), status:"open", ...v}); save(); toast("予約を追加しました"); render(); } });
+    onsave: v => saveApptWithCheck(v, null) });
 };
 window.editAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
   openForm({ title:"予約を編集", fields: apptFields(), data: a,
-    onsave: v => { Object.assign(a, v); save(); toast("更新しました"); render(); } });
+    onsave: v => saveApptWithCheck(v, id) });
 };
 window.delAppt = function(id){
   ask("この予約を削除しますか?", () => { S.appts = S.appts.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
@@ -1345,19 +1457,219 @@ window.checkinAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
   openForm({ title: `${a.name} 様の来店処理(会計)`,
     fields: [
-      {key:"amount", label:"会計金額(円)", type:"number", value: a.price || "", required:true, min:0},
+      {key:"amount", label:"会計金額(円)", type:"number", value: a.price || "", required:true, min:0, half:true},
+      {key:"pay", label:"支払方法", type:"select", options: PAY_METHODS, half:true},
       {key:"category", label:"メニュー(売上カテゴリ)", type:"select", options: INCOME_CATS, value: a.menu},
       {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name]), value: a.staffId},
-      {key:"note", label:"施術メモ(カルテに記録)", type:"textarea"}
+      {key:"note", label:"施術メモ(カルテに記録)", type:"textarea"},
+      {key:"img", label:"施術写真(カルテに保存)", type:"image"},
+      {key:"nextDate", label:"次回予約日(任意)", type:"date", half:true},
+      {key:"nextTime", label:"次回時刻", type:"time", half:true}
     ], saveLabel:"会計を確定",
     onsave: v => {
       a.status = "done";
-      S.tx.push({id: uid(), type:"income", date: a.date, category: v.category, amount: v.amount, memo: `${a.name}様`, staffId: v.staffId});
+      S.tx.push({id: uid(), type:"income", date: a.date, category: v.category, amount: v.amount, memo: `${a.name}様`, staffId: v.staffId, pay: v.pay});
+      const used = consumeInv(v.category);
       let c = S.customers.find(x => x.name === a.name);
       if(!c){ c = {id: uid(), name: a.name, kana:"", phone:"", birthday:"", memo:"", visits: []}; S.customers.push(c); }
-      c.visits.push({id: uid(), date: a.date, menu: v.category, staffId: v.staffId, price: v.amount, note: v.note});
-      save(); toast("会計を記録し、カルテに反映しました"); render();
+      c.visits.push({id: uid(), date: a.date, menu: v.category, staffId: v.staffId, price: v.amount, note: v.note, img: v.img});
+      let msg = "会計を記録し、カルテに反映しました";
+      if(v.nextDate){
+        const nid = uid();
+        S.appts.push({id: nid, date: v.nextDate, time: v.nextTime || "10:00", name: a.name, customerId: a.customerId, menu: v.category,
+          staffId: v.staffId, price: v.amount, status:"open", dur: a.dur || 60, nominated: a.nominated || "", memo:"次回予約"});
+        a.nextApptId = nid;
+        msg += `。次回予約 ${fmtDate(v.nextDate)} を登録しました`;
+      }
+      if(used.length) msg += `(在庫減算: ${used.join("、")})`;
+      save(); toast(msg); render();
     } });
+};
+/* ================= register closing (レジ締め) ================= */
+window.closeNav = d => { V.closeDate = addDays(V.closeDate, d); render(); };
+window.closeToday = () => { V.closeDate = todayStr(); render(); };
+VIEWS.closing = function(){
+  const d = V.closeDate;
+  const inc = S.tx.filter(t => t.type === "income" && t.date === d);
+  const exp = S.tx.filter(t => t.type === "expense" && t.date === d);
+  const byPay = {};
+  PAY_METHODS.forEach(p => byPay[p] = {n:0, v:0});
+  inc.forEach(t => { const p = PAY_METHODS.includes(t.pay) ? t.pay : "現金"; byPay[p].n++; byPay[p].v += num(t.amount); });
+  const totInc = inc.reduce((a,t) => a + num(t.amount), 0), totExp = exp.reduce((a,t) => a + num(t.amount), 0);
+  const c = S.closings[d] || {};
+  const theo = num(c.float) + byPay["現金"].v;
+  const closed = !!c.closed;
+  const diff = closed ? num(c.actual) - theo : null;
+  $("main").innerHTML =
+    pageHead("レジ締め(日計)", "1日の売上を支払方法別に集計し、レジ現金を照合します",
+      `<span class="mnav"><button class="btn sm" onclick="closeNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="closeNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="closeToday()">今日</button>`) +
+    `<div class="card"><h2>支払方法別売上 ${closed ? '<span class="chip good">締め済</span>' : '<span class="chip warn">未締め</span>'}</h2>
+      <div class="twrap"><table>
+        <tr><th>支払方法</th><th class="num">件数</th><th class="num">金額</th></tr>
+        ${PAY_METHODS.map(p => `<tr><td>${p}</td><td class="num">${byPay[p].n}件</td><td class="num">${yen(byPay[p].v)}</td></tr>`).join("")}
+        <tr class="total"><td>合計</td><td class="num">${inc.length}件</td><td class="num">${yen(totInc)}</td></tr>
+      </table></div>
+      <div class="hint">支払方法が未設定の売上は現金として集計します。当日の支出: ${yen(totExp)}(${exp.length}件)</div>
+    </div>
+    <div class="card"><h2>現金照合</h2>
+      <div class="f-2col" style="max-width:480px">
+        <div class="f-row"><label for="cl-float">釣銭準備金(円)</label><input id="cl-float" type="number" inputmode="numeric" min="0" value="${c.float ?? ""}"></div>
+        <div class="f-row"><label for="cl-actual">レジ内実査額(円)</label><input id="cl-actual" type="number" inputmode="numeric" min="0" value="${c.actual ?? ""}"></div>
+      </div>
+      <div class="f-row" style="max-width:480px"><label for="cl-memo">メモ(現金での支払い・両替など)</label><input id="cl-memo" value="${esc(c.memo || "")}"></div>
+      <div style="font-size:13.5px;margin-bottom:12px">理論在高(釣銭準備金+現金売上): <strong>${yen(theo)}</strong>${closed ? ` ・ 過不足: <strong style="color:${diff === 0 ? "var(--good)" : "var(--crit)"}">${diff > 0 ? "+" : diff < 0 ? "−" : "±"}${yen(Math.abs(diff))}</strong>` : ""}</div>
+      <button class="btn pri" onclick="saveClosing()">締めを保存</button>
+      <div class="hint">現金で支払った経費がある場合は、その分だけ実査額が理論在高より少なくなります。メモに残してください。</div>
+    </div>`;
+};
+window.saveClosing = function(){
+  S.closings[V.closeDate] = { float: num($("cl-float").value), actual: num($("cl-actual").value), memo: $("cl-memo").value, closed: true };
+  save(); toast("レジ締めを保存しました"); render();
+};
+/* ================= follow list (失客・誕生日) ================= */
+window.setLostDays = d => { V.lostDays = d; render(); };
+VIEWS.follow = function(){
+  const lost = lostCustomers(V.lostDays);
+  const bd = birthdayList(thisMonth());
+  $("main").innerHTML =
+    pageHead("フォローリスト", "しばらく来店のないお客様と、今月お誕生日のお客様です") +
+    `<div class="card"><h2>失客注意 <span class="h2-sub">最終来店から${V.lostDays}日以上</span></h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        ${[30,60,90].map(dd => `<button class="btn sm${V.lostDays === dd ? " pri" : ""}" onclick="setLostDays(${dd})">${dd}日以上</button>`).join("")}
+        <button class="btn sm" onclick="exportLostCsv()">CSV出力</button>
+      </div>
+      <div class="twrap">${lost.length ? `<table>
+        <tr><th>名前</th><th>電話</th><th>最終来店</th><th class="num">経過日数</th><th class="num">来店回数</th><th></th></tr>
+        ${lost.map(x => `<tr>
+          <td style="font-weight:600">${esc(x.c.name)}</td>
+          <td>${x.c.phone ? `<a href="tel:${esc(x.c.phone)}" style="color:var(--info)">${esc(x.c.phone)}</a>` : "—"}</td>
+          <td>${fmtDate(x.last)}</td>
+          <td class="num" style="color:var(--crit);font-weight:600">${x.gap}日</td>
+          <td class="num">${(x.c.visits || []).length}回</td>
+          <td><button class="btn sm ghost" onclick="openCust('${x.c.id}');go('customers')">カルテ ›</button></td>
+        </tr>`).join("")}</table>` : `<div class="empty">該当するお客様はいません</div>`}</div>
+      <div class="hint">電話番号をタップすると発信できます(スマホ)。DMを送る場合はCSV出力をご利用ください。</div>
+    </div>
+    <div class="card"><h2>今月お誕生日 <span class="h2-sub">${bd.length}名</span> <button class="btn sm" onclick="exportBdCsv()">CSV出力</button></h2>
+      <div class="twrap">${bd.length ? `<table>
+        <tr><th>名前</th><th>誕生日</th><th>電話</th><th></th></tr>
+        ${bd.map(c => `<tr>
+          <td style="font-weight:600">${esc(c.name)}</td>
+          <td>${esc(c.birthday)}</td>
+          <td>${c.phone ? `<a href="tel:${esc(c.phone)}" style="color:var(--info)">${esc(c.phone)}</a>` : "—"}</td>
+          <td><button class="btn sm ghost" onclick="openCust('${c.id}');go('customers')">カルテ ›</button></td>
+        </tr>`).join("")}</table>` : `<div class="empty">今月お誕生日のお客様はいません(顧客カルテに誕生日を登録すると表示されます)</div>`}</div>
+    </div>`;
+};
+window.exportLostCsv = function(){
+  const rows = [["名前","ふりがな","電話","最終来店","経過日数","来店回数"]];
+  lostCustomers(V.lostDays).forEach(x => rows.push([x.c.name, x.c.kana || "", x.c.phone || "", x.last, x.gap, (x.c.visits || []).length]));
+  dlCSV(`失客リスト_${V.lostDays}日以上_${todayStr()}.csv`, rows);
+};
+window.exportBdCsv = function(){
+  const rows = [["名前","ふりがな","電話","誕生日"]];
+  birthdayList(thisMonth()).forEach(c => rows.push([c.name, c.kana || "", c.phone || "", c.birthday]));
+  dlCSV(`誕生日リスト_${thisMonth()}.csv`, rows);
+};
+/* ================= tickets (回数券) ================= */
+VIEWS.tickets = function(){
+  const custName = id => (S.customers.find(c => c.id === id) || {}).name || "—";
+  const list = [...S.tickets].sort((a,b) => (num(b.total) - num(b.used) > 0 ? 1 : 0) - (num(a.total) - num(a.used) > 0 ? 1 : 0) || (b.date || "").localeCompare(a.date || ""));
+  $("main").innerHTML =
+    pageHead("回数券", "トリートメント回数券などの販売と消化を管理します",
+      `<button class="btn pri" onclick="addTicket()">+ 回数券を販売</button>`) +
+    `<div class="card"><div class="twrap">${list.length ? `<table>
+      <tr><th>お客様</th><th>券名</th><th class="num">販売価格</th><th class="num">消化</th><th class="num">残り</th><th>販売日</th><th></th></tr>
+      ${list.map(t => {
+        const left = num(t.total) - num(t.used);
+        return `<tr>
+          <td style="font-weight:600">${esc(custName(t.customerId))}</td>
+          <td>${esc(t.name)}${t.memo ? `<div style="font-size:11px;color:var(--muted)">${esc(t.memo)}</div>` : ""}</td>
+          <td class="num">${yen(t.price)}</td>
+          <td class="num">${num(t.used)}/${num(t.total)}回</td>
+          <td class="num">${left > 0 ? `<strong>${left}回</strong>` : '<span class="chip mut">消化済</span>'}</td>
+          <td style="white-space:nowrap">${fmtDate(t.date)}</td>
+          <td style="white-space:nowrap">
+            ${left > 0 ? `<button class="btn sm" onclick="useTicket('${t.id}')">1回使う</button>` : ""}
+            <button class="btn sm ghost" onclick="editTicket('${t.id}')">編集</button>
+            <button class="btn sm ghost" onclick="delTicket('${t.id}')">削除</button>
+          </td>
+        </tr>`; }).join("")}</table>` : `<div class="empty">回数券はまだありません。「+ 回数券を販売」から登録してください。</div>`}</div>
+      <div class="hint">販売時に「売上にも計上」を選ぶと収支管理へ前受金として計上されます(カテゴリ: その他収入)。消化時の売上計上は不要です。</div>
+    </div>`;
+};
+function ticketFields(){
+  return [
+    {key:"customerId", label:"お客様", type:"select", required:true, blank:"(選択してください)", options: S.customers.map(c => [c.id, c.name])},
+    {key:"name", label:"券名", type:"text", required:true, placeholder:"例: トリートメント5回券"},
+    {key:"total", label:"回数", type:"number", value:5, required:true, min:1, half:true},
+    {key:"price", label:"販売価格(円)", type:"number", min:0, half:true},
+    {key:"date", label:"販売日", type:"date", value: todayStr(), half:true},
+    {key:"pay", label:"支払方法", type:"select", options: PAY_METHODS, half:true},
+    {key:"memo", label:"メモ", type:"text"},
+    {key:"book", label:"売上にも計上する", type:"select", options:[["yes","はい(収支管理に収入を追加)"],["no","いいえ"]]}
+  ];
+}
+window.addTicket = function(){
+  if(!S.customers.length){ toast("先に顧客カルテでお客様を登録してください"); return; }
+  openForm({ title:"回数券を販売", fields: ticketFields(),
+    onsave: v => {
+      const {book, pay, ...t} = v;
+      S.tickets.push({id: uid(), used: 0, ...t});
+      if(book === "yes" && num(t.price) > 0){
+        const cn = (S.customers.find(c => c.id === t.customerId) || {}).name || "";
+        S.tx.push({id: uid(), type:"income", date: t.date || todayStr(), category:"その他収入", amount: num(t.price), memo:`回数券販売: ${t.name}(${cn}様)`, staffId:"", pay});
+      }
+      save(); toast(book === "yes" ? "販売し、売上にも計上しました" : "販売を記録しました"); render();
+    } });
+};
+window.editTicket = function(id){
+  const t = S.tickets.find(x => x.id === id); if(!t) return;
+  const fs = ticketFields().filter(f => f.key !== "book" && f.key !== "pay");
+  openForm({ title:"回数券を編集", fields: fs, data: t,
+    onsave: v => { Object.assign(t, v); t.used = Math.min(num(t.used), num(t.total)); save(); toast("更新しました"); render(); } });
+};
+window.delTicket = function(id){
+  ask("この回数券を削除しますか?", () => { S.tickets = S.tickets.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
+window.useTicket = function(id){
+  const t = S.tickets.find(x => x.id === id); if(!t) return;
+  const left = num(t.total) - num(t.used);
+  if(left <= 0){ toast("この回数券は消化済です"); return; }
+  t.used = num(t.used) + 1;
+  save(); toast(`1回消化しました(残り${left - 1}回)`); render();
+};
+window.viewVisitImg = function(custId, visitId){
+  const c = S.customers.find(x => x.id === custId);
+  const v = c && c.visits.find(x => x.id === visitId);
+  if(!v || !v.img) return;
+  openModal(`<h3>${esc(c.name)} 様 ・ ${fmtDate(v.date)} ${esc(v.menu || "")}</h3><img src="${v.img}" class="imgfull" alt="施術写真">
+    <div class="m-foot"><button class="btn" onclick="closeModal()">閉じる</button></div>`);
+};
+/* ================= payslip (給与明細・ナビ非掲載) ================= */
+window.openPayslips = function(){ go("payslip"); };
+VIEWS.payslip = function(){
+  const m = V.payMonth;
+  const cards = S.staff.map(st => {
+    const p = calcPay(st, m);
+    return `<div class="card" style="max-width:560px">
+      <h2>給与明細 <span class="h2-sub">${fmtMonth(m)}分</span></h2>
+      <div style="font-weight:700;font-size:15px;margin-bottom:8px">${esc(st.name)} 様${st.role ? `(${esc(st.role)})` : ""} ${p.paid ? '<span class="chip good">支払済</span>' : '<span class="chip warn">未払</span>'}</div>
+      <div class="twrap"><table>
+        <tr><td style="color:var(--muted);width:200px">勤務時間</td><td class="num">${p.hours.toFixed(1)}h</td></tr>
+        <tr><td style="color:var(--muted)">基本給(${st.payType === "monthly" ? "月給" : "時給 " + yen(st.wage)})</td><td class="num">${yen(p.base)}</td></tr>
+        <tr><td style="color:var(--muted)">歩合(担当売上 ${yen(p.sales)} × ${num(st.commission)}%)</td><td class="num">${yen(p.comm)}</td></tr>
+        <tr><td style="color:var(--muted)">手当</td><td class="num">${yen(p.allow)}</td></tr>
+        <tr><td style="color:var(--muted)">控除</td><td class="num">${p.deduct ? "−" + yen(p.deduct).slice(1) : yen(0)}</td></tr>
+        <tr class="total"><td>差引支給額</td><td class="num">${yen(p.total)}</td></tr>
+      </table></div>
+      <div class="hint">${esc(S.settings.name)} ・ 発行日 ${fmtDate(todayStr())}${p.memo ? " ・ " + esc(p.memo) : ""}</div>
+    </div>`;
+  }).join("");
+  $("main").innerHTML =
+    pageHead("給与明細", `${esc(S.settings.name)} ・ ${fmtMonth(m)}`,
+      `<button class="btn" onclick="go('payroll')">‹ 給料管理へ</button>${monthNav(m, "payNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button>`) +
+    (S.staff.length ? cards : `<div class="card"><div class="empty">スタッフが未登録です</div></div>`);
 };
 /* ================= settings ================= */
 VIEWS.settings = function(){
