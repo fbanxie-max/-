@@ -310,6 +310,7 @@ const TAX_OPTS = [["10","10%(標準)"],["8","8%(軽減)"],["0","対象外(非課
 /* ================= modal / forms ================= */
 let _form = null, _formImg = {};
 function openModal(html){ $("modal-root").innerHTML = `<div class="m-back" onclick="closeModal()"></div><div class="m-box">${html}</div>`; $("modal-root").classList.add("open"); }
+document.addEventListener("keydown", e => { if(e.key === "Escape" && $("modal-root").classList.contains("open")) closeModal(); });
 function closeModal(){ $("modal-root").classList.remove("open"); $("modal-root").innerHTML = ""; _form = null; _formImg = {}; }
 function ask(msg, onYes){
   window._askYes = () => { closeModal(); onYes(); };
@@ -326,7 +327,11 @@ function fieldHtml(f, val){
       const [v, l] = Array.isArray(o) ? o : [o, o];
       return `<option value="${esc(v)}"${String(v) === String(val) ? " selected" : ""}>${esc(l)}</option>`;
     }).join("");
-    inner = `<select id="${id}"${f.onchange ? ` onchange="${esc(f.onchange)}"` : ""}>${f.blank ? `<option value="">${esc(f.blank)}</option>` : ""}${opts}</select>`;
+    /* 現在値が選択肢に無い場合(過去実績カテゴリ・削除済みメニュー等)は先頭に残し、保存時に値が化けないようにする */
+    const optVals = (f.options || []).map(o => String(Array.isArray(o) ? o[0] : o));
+    const keep = (val !== "" && val !== undefined && !optVals.includes(String(val)))
+      ? `<option value="${esc(val)}" selected>${esc(val)}</option>` : "";
+    inner = `<select id="${id}"${f.onchange ? ` onchange="${esc(f.onchange)}"` : ""}>${f.blank ? `<option value="">${esc(f.blank)}</option>` : ""}${keep}${opts}</select>`;
   } else if(f.type === "textarea"){
     inner = `<textarea id="${id}">${esc(val)}</textarea>`;
   } else if(f.type === "image"){
@@ -630,6 +635,21 @@ function monthNav(month, fnName){
 }
 const VIEWS = {};
 /* ================= dashboard ================= */
+/* 初期設定ガイド(未完了の項目がある間だけダッシュボードに表示) */
+function setupGuideHtml(){
+  const steps = [
+    [S.staff.length > 0, "スタッフを登録する(シフト・給料・担当売上の基礎)", "staff"],
+    [S.menus.length > 0, "メニュー料金表を作る(売上入力がタップだけに)", "menus"],
+    [num(S.settings.target) > 0, "月間売上目標を設定する(達成メーターが出ます)", "settings"],
+    [S.tx.length > 0, "売上・経費を記録する(過去分はまとめ入力もOK)", "money"]
+  ];
+  const done = steps.filter(s => s[0]).length;
+  if(done === steps.length) return "";
+  return `<div class="card"><h2>はじめての設定 <span class="h2-sub">${done}/${steps.length} 完了</span></h2>
+    ${steps.map(([ok, label, view]) => `<div class="alertline">${ok ? '<span class="chip good">完了</span>' : '<span class="chip mut">未設定</span>'}<span${ok ? ' style="color:var(--muted)"' : ""}>${label}</span>${ok ? "" : `<button class="btn sm" onclick="go('${view}')">開く ›</button>`}</div>`).join("")}
+    <div class="hint">まず動きを見たい場合は「設定・バックアップ」→「サンプルデータを投入」でもお試しいただけます。</div>
+  </div>`;
+}
 /* 目標達成ヒーローカード(当月専用) */
 function heroHtml(){
   const m = thisMonth(), tday = todayStr();
@@ -639,8 +659,10 @@ function heroHtml(){
   const forecast = day >= 3 ? Math.round(s.inc / day * dim) : null;
   const pm = addMonths(m, -1);
   const pmCut = pm + "-" + String(Math.min(day, daysInMonth(pm))).padStart(2, "0");
-  const pmInc = S.tx.filter(t => t.type === "income" && t.date && t.date.startsWith(pm) && t.date <= pmCut)
-    .reduce((a,t) => a + num(t.amount), 0);
+  /* 前月同時点の売上。まとめ入力(bulk)の月は日別データがないため日割りで換算する */
+  const pmList = S.tx.filter(t => t.type === "income" && t.date && t.date.startsWith(pm));
+  const pmInc = pmList.filter(t => !t.bulk && t.date <= pmCut).reduce((a,t) => a + num(t.amount), 0)
+    + Math.round(pmList.filter(t => t.bulk).reduce((a,t) => a + num(t.amount), 0) * Math.min(day, daysInMonth(pm)) / daysInMonth(pm));
   const pct = target > 0 ? s.inc / target * 100 : 0;
   const meter = target > 0
     ? `<div class="meter" role="img" aria-label="目標達成率 ${Math.round(pct)}%"><div class="m-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div>`
@@ -705,6 +727,7 @@ VIEWS.dash = function(){
   $("main").innerHTML =
     pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
       `<button class="btn pri" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button><button class="btn" onclick="openReport()">月次レポート</button>`) +
+    setupGuideHtml() +
     heroHtml() +
     (S.menus.length ? `<div class="card"><h2>クイック会計 <span class="h2-sub">タップで今日の売上を記録</span></h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">${S.menus.map(mn =>
