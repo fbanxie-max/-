@@ -252,7 +252,7 @@ td.today-col{background:var(--accent-soft)}
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-v1";
 const DEFAULTS = {
-  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same" }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。旧バックアップにはキーが無いため利用側でガードする
+  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same", closedWd: [], closedDates: [] }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。closedWd: 定休日の曜日番号(0=日〜6=土)、closedDates: 臨時休業日['YYYY-MM-DD']。旧バックアップにはキーが無いため利用側でガードする
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
   tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(支出のみ'10'|'8'|'0'),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
@@ -530,6 +530,17 @@ function targetFor(m){
   const t = num((S.settings.targets || {})[m]);
   return t > 0 ? t : num(S.settings.target);
 }
+/* ---- 定休日・臨時休業 ----
+   未設定なら全日営業扱い(=暦日と同じ)になるため、旧データでも挙動は変わらない */
+const wdOf = iso => new Date(+iso.slice(0,4), +iso.slice(5,7) - 1, +iso.slice(8)).getDay();
+const isClosedDay = iso => (S.settings.closedWd || []).includes(wdOf(iso)) || (S.settings.closedDates || []).includes(iso);
+const hasClosedCfg = () => (S.settings.closedWd || []).length > 0 || (S.settings.closedDates || []).length > 0;
+/* from〜to(両端含む)の営業日数。最長でも月単位でしか使わないため単純ループで数える */
+function bizDaysBetween(from, to){
+  let n = 0;
+  for(let d = from; d <= to; d = addDays(d, 1)) if(!isClosedDay(d)) n++;
+  return n;
+}
 /* 定期支出の自動計上: 前回計上月の翌月から今月まで、計上日を過ぎた分を支出に追加する */
 function applyRecurring(){
   const cur = thisMonth(), today = todayStr();
@@ -677,7 +688,10 @@ function heroHtml(){
   const s = monthSummary(m);
   const target = targetFor(m);
   const day = +tday.slice(8), dim = daysInMonth(m);
-  const forecast = day >= 3 ? Math.round(s.inc / day * dim) : null;
+  /* 営業日ベースの日割り。定休日・臨時休業が未設定なら暦日と一致する */
+  const eom = m + "-" + String(dim).padStart(2, "0");
+  const bizPassed = bizDaysBetween(m + "-01", tday), bizTotal = bizDaysBetween(m + "-01", eom);
+  const forecast = day >= 3 ? Math.round(s.inc / Math.max(1, bizPassed) * bizTotal) : null;
   const pm = addMonths(m, -1);
   const pmCut = pm + "-" + String(Math.min(day, daysInMonth(pm))).padStart(2, "0");
   /* 前月同時点の売上。まとめ入力(bulk)の月は日別データがないため日割りで換算する */
@@ -692,10 +706,13 @@ function heroHtml(){
   if(target > 0){
     subs.push(`目標 <strong>${yen(target)}</strong>`);
     subs.push(`達成 <strong>${Math.round(pct)}%</strong>`);
-    /* 逆算: 残額を残り日数(今日含む)で割って「今日いくら売ればよいか」を示す */
-    const remain = target - s.inc, daysLeft = dim - day + 1;
+    /* 逆算: 残額を残り営業日数(今日含む)で割って「今日いくら売ればよいか」を示す */
+    const remain = target - s.inc, daysLeft = bizDaysBetween(tday, eom);
+    const dayLabel = hasClosedCfg() ? "営業日" : "日";
     subs.push(remain > 0
-      ? `あと <strong>${yen(remain)}</strong>(1日あたり <strong>${yen(Math.ceil(remain / daysLeft))}</strong> × 残り${daysLeft}日)`
+      ? (daysLeft > 0
+        ? `あと <strong>${yen(remain)}</strong>(1日あたり <strong>${yen(Math.ceil(remain / daysLeft))}</strong> × 残り${daysLeft}${dayLabel})`
+        : `あと <strong>${yen(remain)}</strong>(今月の営業日は残っていません)`)
       : `<strong style="color:var(--good)">目標達成!</strong>(+${yen(-remain)})`);
   }
   subs.push(`着地見込み <strong>${forecast === null ? "算出中(3日経過後に表示)" : yen(forecast)}</strong>`);
@@ -2259,6 +2276,19 @@ VIEWS.settings = function(){
       <button class="btn pri" onclick="savePaySchedule()">保存</button>
       <div class="hint">給料管理・給与明細の対象期間と支払日に反映されます。例: 20日締め・当月25日払いの場合、「7月分」は6/21〜7/20の勤務時間・担当売上で計算し、7/25に支払います。締日を「末日」にすると1日〜末日(カレンダー月)の計算になります。</div>
     </div>
+    <div class="card"><h2>定休日・臨時休業 <span class="h2-sub">今月の営業日: ${bizDaysBetween(thisMonth() + "-01", thisMonth() + "-" + String(daysInMonth(thisMonth())).padStart(2, "0"))}日</span></h2>
+      <div class="f-row"><label>定休日(毎週)</label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;padding:4px 0">
+          ${WD.map((w, i) => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:14px;cursor:pointer${i === 0 ? ";color:var(--crit)" : i === 6 ? ";color:var(--info)" : ""}"><input type="checkbox" id="cwd-${i}" ${(S.settings.closedWd || []).includes(i) ? "checked" : ""} onchange="saveClosedWd()">${w}</label>`).join("")}
+        </div></div>
+      <div class="f-2col" style="max-width:420px;align-items:end">
+        <div class="f-row"><label for="set-cd">臨時休業日(お盆・年末年始・研修など)</label><input id="set-cd" type="date" value="${todayStr()}"></div>
+        <div class="f-row"><label>&nbsp;</label><button class="btn" onclick="addClosedDate()">+ 臨時休業に追加</button></div>
+      </div>
+      ${(S.settings.closedDates || []).map(d =>
+        `<div class="alertline">${d.slice(0, 4)}年 ${fmtDate(d)} <button class="btn sm ghost" onclick="delClosedDate('${d}')">削除</button></div>`).join("")}
+      <div class="hint">設定するとダッシュボードの「1日あたり◯円」の逆算と着地見込みが、休みの日を除いた<strong>営業日ベース</strong>で計算されます。未設定の場合は全日営業(暦日)として計算します。</div>
+    </div>
     <div class="card"><h2>バックアップ</h2>
       <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">
         データはこの端末・ブラウザの中(localStorage)だけに保存されます。機種変更やブラウザのデータ削除に備えて、定期的にバックアップファイルを保存してください。現在の使用量: 約${kb}KB。</p>
@@ -2302,6 +2332,24 @@ window.savePaySchedule = function(){
   S.settings.payDay = num($("set-pd").value) || 25;
   S.settings.payMonth = $("set-pm").value === "next" ? "next" : "same";
   save(); toast(`給与を${payCloseLabel()}締め・${payDayLabel()}払いに設定しました`); render();
+};
+window.saveClosedWd = function(){
+  const wd = WD.map((_, i) => i).filter(i => { const el = $("cwd-" + i); return el && el.checked; });
+  if(wd.length === 7){ toast("すべての曜日を定休日にはできません"); render(); return; }
+  S.settings.closedWd = wd;
+  save(); toast(wd.length ? `定休日を${wd.map(i => WD[i]).join("・")}曜日にしました` : "定休日なしにしました"); render();
+};
+window.addClosedDate = function(){
+  const d = $("set-cd").value;
+  if(!d){ toast("日付を選択してください"); return; }
+  S.settings.closedDates = S.settings.closedDates || [];
+  if(S.settings.closedDates.includes(d)){ toast("その日はすでに臨時休業に登録されています"); return; }
+  S.settings.closedDates.push(d); S.settings.closedDates.sort();
+  save(); toast(`${fmtDate(d)}を臨時休業にしました`); render();
+};
+window.delClosedDate = function(d){
+  S.settings.closedDates = (S.settings.closedDates || []).filter(x => x !== d);
+  save(); toast("削除しました"); render();
 };
 window.saveMonthTarget = function(){
   const mm = $("set-tm").value;
