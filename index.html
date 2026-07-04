@@ -219,6 +219,7 @@ td.today-col{background:var(--accent-soft)}
   #main{padding:16px 14px 56px}
   .f-2col{grid-template-columns:1fr}
 }
+#storagewarn{position:sticky;top:0;z-index:200;background:var(--warn-chip);color:var(--warn);font-size:12.5px;font-weight:600;line-height:1.5;padding:8px 14px;text-align:center;border-bottom:1px solid var(--line2)}
 @media print{
   /* ダークテーマ利用中でも印刷は常にライトテーマ(全トークンを強制上書き) */
   :root,:root[data-theme="light"],:root[data-theme="dark"]{
@@ -233,7 +234,7 @@ td.today-col{background:var(--accent-soft)}
     --shadow:none;
   }
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  #sidebar,.ph-actions,.btn,#toast{display:none !important}
+  #sidebar,.ph-actions,.btn,#toast,#storagewarn{display:none !important}
   body{background:#fff;color:var(--ink)}
   #main{max-width:none;padding:0}
   .card,.tile{box-shadow:none;break-inside:avoid}
@@ -251,6 +252,22 @@ td.today-col{background:var(--accent-soft)}
 "use strict";
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-v1";
+/* 保存できない環境の警告。claude.aiのArtifactなどサンドボックス・埋め込み表示では
+   localStorageが使えない/起動ごとに消えるため、入力前に気づけるようバナーを常時表示する */
+(function(){
+  let ok = true;
+  try{ localStorage.setItem(LS_KEY + "_probe", "1"); localStorage.removeItem(LS_KEY + "_probe"); }catch(e){ ok = false; }
+  let framed = false;
+  try{ framed = window.self !== window.top; }catch(e){ framed = true; }
+  if(ok && !framed) return;
+  const div = document.createElement("div");
+  div.id = "storagewarn";
+  if(!ok){ div.style.background = "var(--crit-chip)"; div.style.color = "var(--crit)"; }
+  div.textContent = ok
+    ? "⚠ この画面はプレビュー(埋め込み)表示のため、入力したデータが保存されず、閉じると消える場合があります。毎日の利用は保存できるURL(GitHub Pagesなど)をホーム画面に追加してください。"
+    : "⚠ この表示環境ではデータを端末に保存できません。入力した内容はアプリを閉じると消えます。保存できるURL(GitHub Pagesなど)から開き直してください。";
+  document.body.prepend(div);
+})();
 const DEFAULTS = {
   settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same", closedWd: [], closedDates: [] }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。closedWd: 定休日の曜日番号(0=日〜6=土)、closedDates: 臨時休業日['YYYY-MM-DD']。旧バックアップにはキーが無いため利用側でガードする
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
