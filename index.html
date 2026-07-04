@@ -252,7 +252,7 @@ td.today-col{background:var(--accent-soft)}
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-v1";
 const DEFAULTS = {
-  settings: { name: "マイサロン", target: 0 }, // target: 月間売上目標(円)。旧バックアップにはこのキーが無いため利用側は num()>0 で判定する
+  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "" }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。旧バックアップにはキーが無いため利用側でガードする
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
   tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(支出のみ'10'|'8'|'0'),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
@@ -264,7 +264,8 @@ const DEFAULTS = {
   appts: [],      // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo,dur,nominated,nextApptId}
   closings: {},   // key 'YYYY-MM-DD' -> {float,actual,floatCnt:{金種:枚数},actualCnt,memo,closed} レジ締め
   tickets: [],    // {id,customerId,name,total,used,price,date,memo} 回数券
-  menus: []       // {id,name,price,cat,dur} メニュー料金表(組み合わせメニュー可)。catは集計カテゴリ
+  menus: [],      // {id,name,price,cat,dur} メニュー料金表(組み合わせメニュー可)。catは集計カテゴリ
+  recurring: []   // {id,name,amount,category,taxRate,day,startM,lastM} 定期支出(毎月自動計上)。lastM=計上済みの最終月
 };
 let S = loadState();
 function loadState(){
@@ -334,10 +335,10 @@ function fieldHtml(f, val){
     inner = `<input type="file" id="${id}" accept="image/*" onchange="onImgPick('${f.key}',this)"><div id="${id}-prev">${prev}</div>`;
   } else {
     const t = f.type || "text";
-    const extra = t === "number" ? ` inputmode="decimal" step="${f.step || "1"}" min="${f.min ?? ""}"` : "";
+    const extra = (t === "number" ? ` inputmode="decimal" step="${f.step || "1"}" min="${f.min ?? ""}"` : "") + (f.oninput ? ` oninput="${esc(f.oninput)}"` : "");
     inner = `<input type="${t}" id="${id}" value="${esc(val)}"${extra}${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ""}>`;
   }
-  return `<div class="f-row"${f.half ? ' data-half="1"' : ""}><label for="${id}">${esc(f.label)}${reqMark}</label>${inner}</div>`;
+  return `<div class="f-row"${f.half ? ' data-half="1"' : ""}><label for="${id}">${esc(f.label)}${reqMark}</label>${inner}${f.note ? `<div class="hint" id="${id}-note"></div>` : ""}</div>`;
 }
 function openForm(cfg){
   _form = cfg; _formImg = {};
@@ -510,13 +511,37 @@ function apptConflict(v, excludeId){
     return s < ae && as < e;
   }) || null;
 }
-function hbarHtml(entries, total, color){
+function hbarHtml(entries, total, color, fmt){
+  const f = fmt || yen;
   const max = Math.max(1, ...entries.map(e => e[1]));
   return `<div class="hbar">` + entries.map(([label, v]) => {
     const pct = total > 0 ? Math.round(v / total * 100) : 0;
-    return `<div><div class="hb-top"><span class="hb-label">${esc(label)}</span><span class="hb-val">${yen(v)}<span class="hb-pct">${pct}%</span></span></div>
+    return `<div><div class="hb-top"><span class="hb-label">${esc(label)}</span><span class="hb-val">${f(v)}<span class="hb-pct">${pct}%</span></span></div>
       <div class="hb-track"><div class="hb-fill" style="width:${Math.min(100, v / max * 100).toFixed(1)}%;background:${color}"></div></div></div>`;
   }).join("") + `</div>`;
+}
+/* 月別目標(上書き)があればそれを、なければ共通目標を返す */
+function targetFor(m){
+  const t = num((S.settings.targets || {})[m]);
+  return t > 0 ? t : num(S.settings.target);
+}
+/* 定期支出の自動計上: 前回計上月の翌月から今月まで、計上日を過ぎた分を支出に追加する */
+function applyRecurring(){
+  const cur = thisMonth(), today = todayStr();
+  let n = 0;
+  (S.recurring || []).forEach(r => {
+    let m = r.lastM ? addMonths(r.lastM, 1) : (r.startM || cur);
+    while(m <= cur){
+      const day = Math.min(Math.max(1, num(r.day) || 1), daysInMonth(m));
+      const d = m + "-" + String(day).padStart(2, "0");
+      if(d > today) break;
+      S.tx.push({id: uid(), type:"expense", date: d, category: r.category || "雑費", amount: num(r.amount), memo:`${r.name}(定期支出・自動計上)`, staffId:"", taxRate: r.taxRate || "10", recId: r.id});
+      r.lastM = m; n++;
+      m = addMonths(m, 1);
+    }
+  });
+  if(n) save();
+  return n;
 }
 /* スタッフ別売上・メニュー別構成・支出内訳の3カード(ダッシュボードと月次レポートで共用) */
 function breakdownCardsHtml(m){
@@ -609,7 +634,7 @@ const VIEWS = {};
 function heroHtml(){
   const m = thisMonth(), tday = todayStr();
   const s = monthSummary(m);
-  const target = num(S.settings.target);
+  const target = targetFor(m);
   const day = +tday.slice(8), dim = daysInMonth(m);
   const forecast = day >= 3 ? Math.round(s.inc / day * dim) : null;
   const pm = addMonths(m, -1);
@@ -635,6 +660,23 @@ function heroHtml(){
   </div>`;
 }
 window.setChartN = n => { V.chartN = n; render(); };
+/* クイック会計: 料金表のメニューをタップ→最小限の確認で今日の売上に計上 */
+window.quickSale = function(menuId){
+  const mn = S.menus.find(x => x.id === menuId); if(!mn) return;
+  openForm({ title: `クイック会計: ${mn.name}`, saveLabel: "売上を記録",
+    fields: [
+      {key:"amount", label:"金額(円)", type:"number", value: num(mn.price), required:true, min:0, half:true},
+      {key:"pay", label:"支払方法", type:"select", options: PAY_METHODS, half:true},
+      {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
+      {key:"memo", label:"メモ(お客様名など・任意)", type:"text"}
+    ],
+    onsave: v => {
+      const cat = mn.cat || "その他収入";
+      S.tx.push({id: uid(), type:"income", date: todayStr(), category: cat, amount: v.amount, memo: v.memo || mn.name, staffId: v.staffId, pay: v.pay});
+      const used = consumeInv(cat);
+      save(); toast(`${mn.name} ${yen(v.amount)} を記録しました${used.length ? `(在庫減算: ${used.join("、")})` : ""}`); render();
+    } });
+};
 VIEWS.dash = function(){
   const m = thisMonth(), tday = todayStr();
   const s = monthSummary(m);
@@ -652,11 +694,22 @@ VIEWS.dash = function(){
   pendingOrders.filter(o => o.status === "draft").forEach(o => alerts.push(`<div class="alertline"><span class="chip warn">未発注</span>${esc(o.item)}(${esc(o.supplier)})</div>`));
   const lost = lostCustomers(60);
   if(lost.length) alerts.push(`<div class="alertline"><span class="chip info">フォロー</span>${lost.length}名が60日以上未来店 <button class="btn sm" onclick="go('follow')">確認 ›</button></div>`);
+  /* うっかり防止: 昨日の締め忘れ・バックアップの放置 */
+  const ymd = addDays(tday, -1);
+  if(S.tx.some(t => t.type === "income" && t.date === ymd && !t.bulk) && !(S.closings[ymd] && S.closings[ymd].closed))
+    alerts.push(`<div class="alertline"><span class="chip warn">締め忘れ</span>昨日(${fmtDate(ymd)})のレジ締めが未締めです <button class="btn sm" onclick="openDayClose('${ymd}')">締める ›</button></div>`);
+  const lb = S.settings.lastBackup;
+  if(S.tx.length >= 10 && (!lb || daysDiff(lb, tday) >= 30))
+    alerts.push(`<div class="alertline"><span class="chip warn">バックアップ</span>${lb ? `最終バックアップから${daysDiff(lb, tday)}日経過` : "バックアップが未作成です"}。端末の故障・機種変更に備えて保存を <button class="btn sm" onclick="go('settings')">設定へ ›</button></div>`);
   const hasData = S.tx.length > 0;
   $("main").innerHTML =
     pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
       `<button class="btn pri" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button><button class="btn" onclick="openReport()">月次レポート</button>`) +
     heroHtml() +
+    (S.menus.length ? `<div class="card"><h2>クイック会計 <span class="h2-sub">タップで今日の売上を記録</span></h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${S.menus.map(mn =>
+        `<button class="btn" onclick="quickSale('${mn.id}')">${esc(mn.name)} <strong style="margin-left:2px">${yen(mn.price)}</strong></button>`).join("")}</div>
+    </div>` : "") +
     `<div class="tiles">
       <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件${apptsToday.length ? ` ・ 予約あと${apptsToday.length}件` : ""}</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
@@ -783,7 +836,7 @@ VIEWS.report = function(){
   if(isCur){
     const day = +todayStr().slice(8), dim = daysInMonth(m);
     const forecast = day >= 3 ? Math.round(s.inc / day * dim) : null;
-    const target = num(S.settings.target);
+    const target = targetFor(m);
     outlook = `<div class="card"><h2>今月の見通し <span class="h2-sub">${day}日経過 / ${dim}日</span></h2>
       <div class="hr-sub">
         <span>着地見込み <strong>${forecast === null ? "算出中(3日経過後に表示)" : yen(forecast)}</strong></span>
@@ -878,7 +931,7 @@ VIEWS.reports = function(){
   const m = V.reportsMonth, tday = todayStr();
   const days = dailyRows(m);
   const totInc = days.reduce((a,x) => a + x.inc, 0), totExp = days.reduce((a,x) => a + x.exp, 0), totCount = days.reduce((a,x) => a + x.count, 0);
-  const target = num(S.settings.target);
+  const target = num(S.settings.target) > 0 || Object.values(S.settings.targets || {}).some(v => num(v) > 0) ? 1 : 0;
   /* 月報: 直近12ヶ月のうち取引がある月(当月は常に表示) */
   const months = lastMonths(12).filter(mm => mm === thisMonth() || txInMonth(mm).length).reverse();
   $("main").innerHTML =
@@ -915,14 +968,38 @@ VIEWS.reports = function(){
             <td class="num">${s.count}件</td>
             <td class="num">${yen(s.avg)}</td>
             <td class="num">${yen(s.mat)}${s.inc > 0 ? `<span style="color:var(--muted);font-size:12px">(${Math.round(s.mat / s.inc * 100)}%)</span>` : ""}</td>
-            ${target > 0 ? `<td class="num">${Math.round(s.inc / target * 100)}%</td>` : ""}
+            ${target > 0 ? `<td class="num">${targetFor(mm) > 0 ? Math.round(s.inc / targetFor(mm) * 100) + "%" : "—"}</td>` : ""}
             <td><button class="btn sm ghost" onclick="event.stopPropagation();openMonthReport('${mm}')">月次レポート ›</button></td>
           </tr>`; }).join("")}</table>` : `<div class="empty">まだ記録がありません</div>`}</div>
       <div class="hint">行をクリックするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。</div>
     </div>` +
-    yoyCardHtml(m.slice(0, 4));
+    yoyCardHtml(m.slice(0, 4)) +
+    trendCardsHtml();
   attachChartTips();
 };
+/* 曜日別売上・時間帯別来店(直近90日、まとめ入力は除外) */
+function trendCardsHtml(){
+  const from = addDays(todayStr(), -89);
+  const list = S.tx.filter(t => t.type === "income" && !t.bulk && t.date && t.date >= from);
+  const wd = Array(7).fill(0);
+  list.forEach(t => { const [y, mo, d] = t.date.split("-").map(Number); wd[new Date(y, mo - 1, d).getDay()] += num(t.amount); });
+  const wdEntries = [1, 2, 3, 4, 5, 6, 0].map(i => [WD[i] + "曜日", wd[i]]);
+  const total = wd.reduce((a, v) => a + v, 0);
+  const done = S.appts.filter(a => a.status === "done" && a.date >= from && a.time);
+  const hours = {};
+  done.forEach(a => { const h = +a.time.slice(0, 2); hours[h] = (hours[h] || 0) + 1; });
+  const hourEntries = Object.keys(hours).map(Number).sort((a, b) => a - b).map(h => [`${h}時台`, hours[h]]);
+  return `<div class="grid2" style="margin-bottom:16px">
+    <div class="card"><h2>曜日別売上 <span class="h2-sub">直近90日</span></h2>
+      ${total ? hbarHtml(wdEntries, total, "var(--income)") : `<div class="empty">直近90日の売上記録がありません</div>`}
+      <div class="hint">忙しい曜日・暇な曜日の把握に。定休日やキャンペーン曜日の検討材料になります。</div>
+    </div>
+    <div class="card"><h2>時間帯別の来店 <span class="h2-sub">直近90日</span></h2>
+      ${hourEntries.length ? hbarHtml(hourEntries, done.length, "var(--accent)", v => v + "件") : `<div class="empty">来店処理した予約がまだありません</div>`}
+      <div class="hint">予約管理で来店処理したデータから集計します。</div>
+    </div>
+  </div>`;
+}
 window.exportDailyCsv = function(){
   const m = V.reportsMonth;
   const rows = [["日付","売上","件数","客単価","支出","差引","レジ締め","過不足"]];
@@ -994,7 +1071,55 @@ VIEWS.money = function(){
         </tr>`).join("")}</table>` : `<div class="empty">${fmtMonth(m)}の記録はまだありません</div>`}</div>
     </div>
     ${catRows ? `<div class="card"><h2>カテゴリ別集計</h2><div class="twrap"><table><tr><th>区分</th><th>カテゴリ</th><th class="num">合計</th></tr>${catRows}</table></div></div>` : ""}` +
+    recurringCardHtml() +
     yearSummaryHtml(m.slice(0, 4));
+};
+/* 定期支出(毎月自動計上)の管理カード */
+function recurringCardHtml(){
+  const rows = (S.recurring || []).map(r => {
+    const nm = r.lastM ? addMonths(r.lastM, 1) : (r.startM || thisMonth());
+    const nd = nm + "-" + String(Math.min(Math.max(1, num(r.day) || 1), daysInMonth(nm))).padStart(2, "0");
+    return `<tr>
+      <td style="font-weight:600">${esc(r.name)}</td>
+      <td class="num">${yen(r.amount)}</td>
+      <td>${esc(r.category)}</td>
+      <td class="num">毎月${num(r.day) || 1}日</td>
+      <td style="white-space:nowrap">${fmtDate(nd)}</td>
+      <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editRecurring('${r.id}')">編集</button><button class="btn sm ghost" onclick="delRecurring('${r.id}')">停止</button></td>
+    </tr>`;
+  }).join("");
+  return `<div class="card"><h2>定期支出(毎月自動計上) <span class="h2-sub">${(S.recurring || []).length}件</span> <button class="btn sm pri" onclick="addRecurring()">+ 追加</button></h2>
+    ${rows ? `<div class="twrap"><table><tr><th>名称</th><th class="num">金額</th><th>カテゴリ</th><th class="num">計上日</th><th>次回計上</th><th></th></tr>${rows}</table></div>`
+      : `<div class="empty">家賃・リース料・保険料など毎月同じ支出を登録すると、アプリを開いたときに自動で計上されます。</div>`}
+    <div class="hint">計上日を過ぎた月の分が自動で支出に追加されます(過去にさかのぼって追加はされません)。金額を変えると次回計上分から反映、「停止」しても計上済みの記録は残ります。</div>
+  </div>`;
+}
+function recurringFields(){
+  return [
+    {key:"name", label:"名称(例: 家賃、リース料)", type:"text", required:true},
+    {key:"amount", label:"金額(円)", type:"number", required:true, min:0, half:true},
+    {key:"day", label:"毎月の計上日(1〜31)", type:"number", value:25, min:1, half:true},
+    {key:"category", label:"経費カテゴリ", type:"select", options: EXPENSE_CATS, value:"家賃"},
+    {key:"taxRate", label:"税区分", type:"select", options: TAX_OPTS}
+  ];
+}
+window.addRecurring = function(){
+  openForm({ title:"定期支出を追加", fields: recurringFields(),
+    onsave: v => {
+      S.recurring.push({id: uid(), ...v, startM: thisMonth(), lastM: ""});
+      const n = applyRecurring();
+      save(); toast(n ? "追加し、今月分を計上しました" : "追加しました(計上日になったら自動計上されます)"); render();
+    } });
+};
+window.editRecurring = function(id){
+  const r = S.recurring.find(x => x.id === id); if(!r) return;
+  openForm({ title:"定期支出を編集", fields: recurringFields(), data: r,
+    onsave: v => { Object.assign(r, v); save(); toast("更新しました(次回計上分から反映)"); render(); } });
+};
+window.delRecurring = function(id){
+  ask("この定期支出を停止しますか?(計上済みの記録はそのまま残ります)", () => {
+    S.recurring = S.recurring.filter(x => x.id !== id); save(); toast("停止しました"); render();
+  });
 };
 /* 年間集計(確定申告の下ごしらえ用)。表示中の月の年で集計する */
 function yearSummaryHtml(yr){
@@ -1457,22 +1582,29 @@ VIEWS.customers = function(){
     <div class="card"><div id="custlist"></div></div>`;
   renderCustList();
 };
+window.tagFilter = t => { V.custQ = t; render(); };
+const custTags = c => (c.tags || "").split(",").map(s => s.trim()).filter(Boolean);
 function renderCustList(){
   const q = V.custQ.trim().toLowerCase();
-  const list = S.customers.filter(c => !q || [c.name, c.kana, c.phone].some(v => (v || "").toLowerCase().includes(q)))
+  const list = S.customers.filter(c => !q || [c.name, c.kana, c.phone, c.tags].some(v => (v || "").toLowerCase().includes(q)))
     .sort((a,b) => (b.visits.at(-1)?.date || "").localeCompare(a.visits.at(-1)?.date || ""));
   const elx = $("custlist"); if(!elx) return;
-  elx.innerHTML = list.length ? `<div class="twrap"><table>
+  const allTags = [...new Set(S.customers.flatMap(custTags))];
+  const tagBar = allTags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+    ${allTags.map(t => `<button class="chip ${V.custQ === t ? "info" : "mut"}" style="cursor:pointer;border:0;font-family:inherit" onclick="tagFilter('${esc(t)}')">${esc(t)}</button>`).join("")}
+    ${V.custQ ? `<button class="chip mut" style="cursor:pointer;border:0;font-family:inherit" onclick="tagFilter('')">× 絞り込み解除</button>` : ""}
+  </div>` : "";
+  elx.innerHTML = tagBar + (list.length ? `<div class="twrap"><table>
     <tr><th>名前</th><th>電話</th><th class="num">来店回数</th><th>最終来店</th><th>メモ</th></tr>
     ${list.map(c => {
       const last = c.visits.at(-1);
       return `<tr class="rowlink" onclick="openCust('${c.id}')">
-        <td style="font-weight:600">${esc(c.name)}${c.kana ? `<div style="font-size:11px;color:var(--muted)">${esc(c.kana)}</div>` : ""}</td>
+        <td style="font-weight:600">${esc(c.name)}${c.kana ? `<div style="font-size:11px;color:var(--muted)">${esc(c.kana)}</div>` : ""}${custTags(c).length ? `<div style="margin-top:2px">${custTags(c).map(t => `<span class="chip mut">${esc(t)}</span>`).join(" ")}</div>` : ""}</td>
         <td>${esc(c.phone)}</td>
         <td class="num">${c.visits.length}回</td>
         <td>${last ? fmtDate(last.date) : "—"}</td>
         <td style="color:var(--ink2);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.memo)}</td>
-      </tr>`; }).join("")}</table></div>` : `<div class="empty">${q ? "該当する顧客が見つかりません" : "顧客が未登録です"}</div>`;
+      </tr>`; }).join("")}</table></div>` : `<div class="empty">${q ? "該当する顧客が見つかりません" : "顧客が未登録です"}</div>`);
 }
 function renderCustDetail(){
   const c = S.customers.find(x => x.id === V.custSel);
@@ -1487,6 +1619,7 @@ function renderCustDetail(){
         <div class="twrap"><table>
           <tr><td style="color:var(--muted);width:96px">電話</td><td>${c.phone ? `<a href="tel:${esc(c.phone)}" style="color:var(--info)">${esc(c.phone)}</a>` : "—"}</td></tr>
           <tr><td style="color:var(--muted)">誕生日</td><td>${c.birthday ? esc(c.birthday) : "—"}</td></tr>
+          <tr><td style="color:var(--muted)">タグ</td><td>${custTags(c).length ? custTags(c).map(t => `<span class="chip mut">${esc(t)}</span>`).join(" ") : "—"}</td></tr>
           <tr><td style="color:var(--muted)">メモ</td><td>${esc(c.memo) || "—"}</td></tr>
           <tr><td style="color:var(--muted)">回数券</td><td>${(S.tickets.filter(t => t.customerId === c.id && num(t.total) - num(t.used) > 0).map(t =>
             `${esc(t.name)} 残${num(t.total) - num(t.used)}回 <button class="btn sm" onclick="useTicket('${t.id}')">1回使う</button>`).join("<br>")) || "—"}</td></tr>
@@ -1508,6 +1641,7 @@ function custFields(){
     {key:"kana", label:"ふりがな", type:"text", half:true},
     {key:"phone", label:"電話番号", type:"tel", half:true},
     {key:"birthday", label:"誕生日", type:"date", half:true},
+    {key:"tags", label:"タグ(カンマ区切り。例: VIP,カラー派,学生)", type:"text"},
     {key:"memo", label:"メモ(髪質・好み・アレルギーなど)", type:"textarea"}
   ];
 }
@@ -1615,6 +1749,15 @@ function apptFields(){
     {key:"memo", label:"メモ", type:"text", half:true}
   ];
 }
+/* 会計フォームのお釣り計算(預かり金 − 明細合計)。表示のみで保存はされない */
+window.calcChange = function(){
+  const el = $("ff-tendered-note"); if(!el) return;
+  const total = num(($("ff-amount") || {}).value) + num(($("ff-amount2") || {}).value) + num(($("ff-amount3") || {}).value);
+  const tender = num(($("ff-tendered") || {}).value);
+  el.innerHTML = tender > 0
+    ? `会計 ${yen(total)} → お釣り <strong style="font-size:16px;color:${tender >= total ? "var(--good)" : "var(--crit)"}">${tender >= total ? yen(tender - total) : "不足 " + yen(total - tender)}</strong>`
+    : "";
+};
 /* 保存前にダブルブッキングを検知。重複時は確認してから保存する */
 function saveApptWithCheck(v, id){
   const doSave = () => {
@@ -1647,13 +1790,14 @@ window.checkinAppt = function(id){
   openForm({ title: `${a.name} 様の来店処理(会計)`,
     fields: [
       {key:"category", label:"メニュー1(料金表から選ぶと金額が自動入力)", type:"select", options: menuSelOptions(INCOME_CATS), value: a.menu, onchange:"menuPick(this,'ff-amount')", half:true},
-      {key:"amount", label:"金額1(円)", type:"number", value: a.price || "", required:true, min:0, half:true},
+      {key:"amount", label:"金額1(円)", type:"number", value: a.price || "", required:true, min:0, oninput:"calcChange()", half:true},
       {key:"menu2", label:"メニュー2(任意)", type:"select", blank:"(なし)", options: menuSelOptions(INCOME_CATS), onchange:"menuPick(this,'ff-amount2')", half:true},
-      {key:"amount2", label:"金額2(円)", type:"number", min:0, half:true},
+      {key:"amount2", label:"金額2(円)", type:"number", min:0, oninput:"calcChange()", half:true},
       {key:"menu3", label:"メニュー3(任意)", type:"select", blank:"(なし)", options: menuSelOptions(INCOME_CATS), onchange:"menuPick(this,'ff-amount3')", half:true},
-      {key:"amount3", label:"金額3(円)", type:"number", min:0, half:true},
+      {key:"amount3", label:"金額3(円)", type:"number", min:0, oninput:"calcChange()", half:true},
       {key:"pay", label:"支払方法", type:"select", options: PAY_METHODS, half:true},
       {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name]), value: a.staffId, half:true},
+      {key:"tendered", label:"預かり金(円・入れるとお釣りを表示)", type:"number", min:0, oninput:"calcChange()", note:true},
       {key:"note", label:"施術メモ(カルテに記録)", type:"textarea"},
       {key:"img", label:"施術写真(カルテに保存)", type:"image"},
       {key:"nextDate", label:"次回予約日(任意)", type:"date", half:true},
@@ -2024,6 +2168,16 @@ VIEWS.settings = function(){
       <div class="hint">設定するとダッシュボードに達成メーターが表示されます。空欄で非表示。</div></div>
       <button class="btn pri" onclick="saveSettings()">保存</button>
     </div>
+    <div class="card"><h2>月別の売上目標 <span class="h2-sub">繁忙月・閑散月で目標を変えたいときに</span></h2>
+      <div class="f-2col" style="max-width:420px">
+        <div class="f-row"><label for="set-tm">対象月</label><input id="set-tm" type="month" value="${thisMonth()}"></div>
+        <div class="f-row"><label for="set-tma">その月の目標(円)</label><input id="set-tma" type="number" inputmode="numeric" min="0" step="10000" placeholder="空欄で共通目標に戻す"></div>
+      </div>
+      <button class="btn" onclick="saveMonthTarget()">月別目標を保存</button>
+      ${Object.entries(S.settings.targets || {}).filter(([,v]) => num(v) > 0).sort((a,b) => b[0].localeCompare(a[0])).map(([mm, v]) =>
+        `<div class="alertline">${fmtMonth(mm)} <strong>${yen(v)}</strong> <button class="btn sm ghost" onclick="delMonthTarget('${mm}')">削除</button></div>`).join("")}
+      <div class="hint">設定した月はこの目標が優先され、それ以外の月は上の共通目標が使われます。</div>
+    </div>
     <div class="card"><h2>バックアップ</h2>
       <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">
         データはこの端末・ブラウザの中(localStorage)だけに保存されます。機種変更やブラウザのデータ削除に備えて、定期的にバックアップファイルを保存してください。現在の使用量: 約${kb}KB。</p>
@@ -2050,7 +2204,20 @@ window.saveSettings = function(){
   S.settings.target = Math.max(0, num($("set-target").value));
   save(); toast("保存しました"); render();
 };
+window.saveMonthTarget = function(){
+  const mm = $("set-tm").value;
+  if(!mm){ toast("対象月を選択してください"); return; }
+  const v = Math.max(0, num($("set-tma").value));
+  S.settings.targets = S.settings.targets || {};
+  if(v > 0) S.settings.targets[mm] = v; else delete S.settings.targets[mm];
+  save(); toast(v > 0 ? `${fmtMonth(mm)}の目標を${yen(v)}にしました` : `${fmtMonth(mm)}は共通目標に戻しました`); render();
+};
+window.delMonthTarget = function(mm){
+  if(S.settings.targets) delete S.settings.targets[mm];
+  save(); toast("削除しました"); render();
+};
 window.exportBackup = function(){
+  S.settings.lastBackup = todayStr(); save();
   dlText(`salon-backup_${todayStr()}.json`, JSON.stringify(S, null, 1), "application/json");
   toast("バックアップを書き出しました");
 };
@@ -2112,7 +2279,9 @@ window.seedSample = function(){
   save(); toast("サンプルデータを投入しました"); render();
 };
 /* ================= boot ================= */
+const _recN = applyRecurring();
 render();
+if(_recN) toast(`定期支出${_recN}件を自動計上しました`);
 </script>
 </body>
 </html>
