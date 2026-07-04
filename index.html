@@ -264,7 +264,7 @@ const DEFAULTS = {
   appts: [],      // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo,dur,nominated,nextApptId}
   closings: {},   // key 'YYYY-MM-DD' -> {float,actual,floatCnt:{金種:枚数},actualCnt,memo,closed} レジ締め
   tickets: [],    // {id,customerId,name,total,used,price,date,memo} 回数券
-  menus: [],      // {id,name,price,cat,dur} メニュー料金表(組み合わせメニュー可)。catは集計カテゴリ
+  menus: [],      // {id,name,price,cat,dur,cost} メニュー料金表(組み合わせメニュー可)。catは集計カテゴリ、costは材料原価(任意)
   recurring: []   // {id,name,amount,category,taxRate,day,startM,lastM} 定期支出(毎月自動計上)。lastM=計上済みの最終月
 };
 let S = loadState();
@@ -671,6 +671,11 @@ function heroHtml(){
   if(target > 0){
     subs.push(`目標 <strong>${yen(target)}</strong>`);
     subs.push(`達成 <strong>${Math.round(pct)}%</strong>`);
+    /* 逆算: 残額を残り日数(今日含む)で割って「今日いくら売ればよいか」を示す */
+    const remain = target - s.inc, daysLeft = dim - day + 1;
+    subs.push(remain > 0
+      ? `あと <strong>${yen(remain)}</strong>(1日あたり <strong>${yen(Math.ceil(remain / daysLeft))}</strong> × 残り${daysLeft}日)`
+      : `<strong style="color:var(--good)">目標達成!</strong>(+${yen(-remain)})`);
   }
   subs.push(`着地見込み <strong>${forecast === null ? "算出中(3日経過後に表示)" : yen(forecast)}</strong>`);
   subs.push(`前月同日比 <strong${pmInc > 0 ? ` style="color:${s.inc >= pmInc ? "var(--good)" : "var(--crit)"}"` : ""}>${pmInc > 0 ? (s.inc >= pmInc ? "+" : "−") + Math.abs(Math.round((s.inc - pmInc) / pmInc * 100)) + "%" : "前月実績なし"}</strong>`);
@@ -946,7 +951,7 @@ function dailyRows(m){
     const exp = list.filter(t => t.type === "expense").reduce((a,t) => a + num(t.amount), 0);
     const cash = incL.filter(t => !t.pay || t.pay === "現金").reduce((a,t) => a + num(t.amount), 0);
     const diff = c && c.closed ? num(c.actual) - (num(c.float) + cash) : null;
-    rows.push({ d, inc, count: salesCount(incL), exp, closed: !!(c && c.closed), diff });
+    rows.push({ d, inc, count: salesCount(incL), exp, closed: !!(c && c.closed), diff, memo: (c && c.memo) || "" });
   }
   return rows;
 }
@@ -962,7 +967,7 @@ VIEWS.reports = function(){
       `<button class="btn" onclick="openBulk()">過去実績のまとめ入力</button>`) +
     `<div class="card"><h2>日報一覧 ${monthNav(m, "reportsNav")} <button class="btn sm" onclick="exportDailyCsv()">CSV出力</button></h2>
       <div class="twrap">${days.length ? `<table>
-        <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th class="num">客単価</th><th class="num">支出</th><th class="num">差引</th><th>レジ締め</th></tr>
+        <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th class="num">客単価</th><th class="num">支出</th><th class="num">差引</th><th>レジ締め</th><th>メモ</th></tr>
         ${days.map(x => `<tr class="rowlink" onclick="openDayClose('${x.d}')"${x.d === tday ? ' style="background:var(--accent-soft)"' : ""}>
           <td style="white-space:nowrap;font-weight:600">${fmtDate(x.d)}</td>
           <td class="num">${yen(x.inc)}</td>
@@ -973,8 +978,9 @@ VIEWS.reports = function(){
           <td>${x.closed
             ? `<span class="chip good">締め済</span>${x.diff !== 0 ? ` <span style="color:var(--crit);font-size:12px">${x.diff > 0 ? "+" : "−"}${yen(Math.abs(x.diff))}</span>` : ""}`
             : (x.count ? '<span class="chip warn">未締め</span>' : "")}</td>
+          <td style="color:var(--ink2);font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.memo)}</td>
         </tr>`).join("")}
-        <tr class="total"><td>合計</td><td class="num">${yen(totInc)}</td><td class="num">${totCount}件</td><td class="num">${totCount ? yen(Math.round(totInc / totCount)) : "—"}</td><td class="num">${yen(totExp)}</td><td class="num">${yen(totInc - totExp)}</td><td></td></tr>
+        <tr class="total"><td>合計</td><td class="num">${yen(totInc)}</td><td class="num">${totCount}件</td><td class="num">${totCount ? yen(Math.round(totInc / totCount)) : "—"}</td><td class="num">${yen(totExp)}</td><td class="num">${yen(totInc - totExp)}</td><td></td><td></td></tr>
       </table>` : `<div class="empty">${fmtMonth(m)}の記録はまだありません</div>`}</div>
       <div class="hint">行をクリックするとその日のレジ締め(日計)が開きます。過不足がある日は金額を赤字で表示します。</div>
     </div>
@@ -1025,9 +1031,9 @@ function trendCardsHtml(){
 }
 window.exportDailyCsv = function(){
   const m = V.reportsMonth;
-  const rows = [["日付","売上","件数","客単価","支出","差引","レジ締め","過不足"]];
+  const rows = [["日付","売上","件数","客単価","支出","差引","レジ締め","過不足","メモ"]];
   dailyRows(m).forEach(x => rows.push([x.d, x.inc, x.count, x.count ? Math.round(x.inc / x.count) : "", x.exp, x.inc - x.exp,
-    x.closed ? "締め済" : "未締め", x.closed ? x.diff : ""]));
+    x.closed ? "締め済" : "未締め", x.closed ? x.diff : "", x.memo]));
   dlCSV(`日報_${m}.csv`, rows);
 };
 /* 売上の前年対比カード(1〜12月の月別売上を前年と並べる) */
@@ -1710,6 +1716,20 @@ window.setApptMode = mode => { V.apptMode = mode; render(); };
 window.apptWeekNav = d => { V.apptWeek = addDays(V.apptWeek, d * 7); render(); };
 window.apptWeekToday = () => { V.apptWeek = mondayOf(todayStr()); render(); };
 const APPT_STATUS = { open:["予約中","info"], done:["来店済","good"], cancel:["キャンセル","mut"] };
+/* リマインド定型文(SMS・LINEへ貼り付け用)。日付は本日/明日/日付表記を自動判定 */
+function relDay(d){ const t = todayStr(); return d === t ? "本日" : d === addDays(t, 1) ? "明日" : fmtDate(d); }
+function remindText(a){
+  return `${a.name}様\nいつもありがとうございます。${S.settings.name}です。\n${relDay(a.date)} ${a.time}より${a.menu ? `${a.menu}の` : ""}ご予約を承っております。ご来店を心よりお待ちしております。`;
+}
+window.copyRemind = function(id){
+  const a = S.appts.find(x => x.id === id); if(!a) return;
+  copyText(remindText(a));
+};
+window.copyRemindAll = function(d){
+  const list = S.appts.filter(a => a.date === d && a.status === "open").sort((a,b) => a.time.localeCompare(b.time));
+  if(!list.length){ toast("この日の予約はありません"); return; }
+  copyText(list.map(remindText).join("\n\n----\n\n"));
+};
 function apptModeBtns(){
   return `<button class="btn sm${V.apptMode !== "week" ? " pri" : ""}" onclick="setApptMode('day')">日</button><button class="btn sm${V.apptMode === "week" ? " pri" : ""}" onclick="setApptMode('week')">週</button>`;
 }
@@ -1729,8 +1749,8 @@ function renderApptWeek(){
     return `<tr><td style="font-weight:600;white-space:nowrap">${esc(name)}</td>${cells}</tr>`;
   }).join("");
   $("main").innerHTML =
-    pageHead("予約管理", "週表示: 予約をクリックすると編集できます",
-      `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptWeekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="apptWeekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="apptWeekToday()">今週</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
+    pageHead("予約管理", `${fmtDate(days[0])} 〜 ${fmtDate(days[6])} ・ 予約をクリックすると編集できます`,
+      `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptWeekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="apptWeekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="apptWeekToday()">今週</button><button class="btn sm" onclick="window.print()">印刷</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
     `<div class="card"><div class="twrap"><table><tr><th>担当</th>${head}</tr>${rows}</table></div>
       <div class="hint">同じ担当で時間帯が重なる予約は、登録・編集時に警告が表示されます。</div></div>`;
 }
@@ -1738,9 +1758,10 @@ VIEWS.appts = function(){
   if(V.apptMode === "week"){ renderApptWeek(); return; }
   const d = V.apptDate;
   const list = S.appts.filter(a => a.date === d).sort((a,b) => a.time.localeCompare(b.time));
+  const openCount = list.filter(a => a.status === "open").length;
   $("main").innerHTML =
-    pageHead("予約管理", "来店処理をすると売上と顧客カルテに自動で反映されます",
-      `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="apptNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="apptToday()">今日</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
+    pageHead("予約管理", `${fmtDate(d)} の予約 ・ 来店処理をすると売上と顧客カルテに自動反映されます`,
+      `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="apptNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="apptToday()">今日</button>${openCount ? `<button class="btn sm" onclick="copyRemindAll('${d}')">リマインド文を全件コピー</button>` : ""}<button class="btn sm" onclick="window.print()">印刷</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
     `<div class="card"><div class="twrap">${list.length ? `<table>
       <tr><th>時刻</th><th>お客様</th><th>メニュー</th><th>担当</th><th class="num">予定金額</th><th>状態</th><th></th></tr>
       ${list.map(a => {
@@ -1753,7 +1774,7 @@ VIEWS.appts = function(){
           <td class="num">${a.price ? yen(a.price) : "—"}</td>
           <td><span class="chip ${cls}">${lbl}</span></td>
           <td style="white-space:nowrap">
-            ${a.status === "open" ? `<button class="btn sm pri" onclick="checkinAppt('${a.id}')">来店処理</button><button class="btn sm ghost" onclick="cancelAppt('${a.id}')">キャンセル</button>` : ""}
+            ${a.status === "open" ? `<button class="btn sm pri" onclick="checkinAppt('${a.id}')">来店処理</button><button class="btn sm ghost" onclick="copyRemind('${a.id}')" title="リマインド定型文をコピー">文コピー</button><button class="btn sm ghost" onclick="cancelAppt('${a.id}')">キャンセル</button>` : ""}
             <button class="btn sm ghost" onclick="editAppt('${a.id}')">編集</button>
             <button class="btn sm ghost" onclick="delAppt('${a.id}')">削除</button>
           </td>
@@ -1897,7 +1918,7 @@ VIEWS.closing = function(){
         <div class="f-row"><label for="cl-float">釣銭準備金 合計(円)</label><input id="cl-float" type="number" inputmode="numeric" min="0" value="${c.float ?? ""}" oninput="updateCashLive()"></div>
         <div class="f-row"><label for="cl-actual">レジ内実査額 合計(円)</label><input id="cl-actual" type="number" inputmode="numeric" min="0" value="${c.actual ?? ""}" oninput="updateCashLive()"></div>
       </div>
-      <div class="f-row" style="max-width:520px"><label for="cl-memo">メモ(現金での支払い・両替など)</label><input id="cl-memo" value="${esc(c.memo || "")}"></div>
+      <div class="f-row" style="max-width:520px"><label for="cl-memo">日別メモ(天気・出来事・現金支払いなど。日報一覧に表示されます)</label><input id="cl-memo" value="${esc(c.memo || "")}" placeholder="例: 雨/近隣で祭り/佐藤が欠勤"></div>
       <div id="cl-live" style="font-size:13.5px;margin-bottom:12px"></div>
       <button class="btn pri" onclick="saveClosing()">締めを保存</button>
       <div class="hint">金種表を使わず合計欄へ直接入力もできます(枚数を変更すると合計欄は自動で上書き)。現金で支払った経費がある場合は、その分だけ実査額が理論在高より少なくなります。メモに残してください。</div>
@@ -2137,21 +2158,23 @@ VIEWS.menus = function(){
     pageHead("メニュー料金表", "登録したメニューは売上記録・会計・予約の選択肢に価格つきで表示され、金額が自動入力されます",
       `<button class="btn pri" onclick="addMenu()">+ メニューを追加</button>`) +
     `<div class="card"><div class="twrap">${list.length ? `<table>
-      <tr><th>メニュー名</th><th class="num">料金</th><th>集計カテゴリ</th><th class="num">所要時間</th><th></th></tr>
+      <tr><th>メニュー名</th><th class="num">料金</th><th class="num">材料原価 / 粗利率</th><th>集計カテゴリ</th><th class="num">所要時間</th><th></th></tr>
       ${list.map(mn => `<tr>
         <td style="font-weight:600">${esc(mn.name)}</td>
         <td class="num" style="font-weight:600">${yen(mn.price)}</td>
+        <td class="num">${num(mn.cost) > 0 && num(mn.price) > 0 ? `${yen(mn.cost)} / <strong style="color:${(mn.price - mn.cost) / mn.price >= 0.8 ? "var(--good)" : "var(--ink)"}">${Math.round((mn.price - mn.cost) / mn.price * 100)}%</strong>` : "—"}</td>
         <td><span class="chip mut">${esc(mn.cat || "その他収入")}</span></td>
         <td class="num">${num(mn.dur) ? num(mn.dur) + "分" : "—"}</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editMenu('${mn.id}')">編集</button><button class="btn sm ghost" onclick="delMenu('${mn.id}')">削除</button></td>
       </tr>`).join("")}</table>` : `<div class="empty">メニューが未登録です。「カット ¥4,000」「カット+カラー ¥8,000」のように、組み合わせメニューも自由に登録できます。</div>`}</div>
-      <div class="hint">値上げ・値下げはここで料金を編集するだけです(過去の売上記録は変わりません)。集計カテゴリは売上グラフの分類と在庫の自動減算に使われます(例:「カット+カラー」→ カラー)。</div>
+      <div class="hint">値上げ・値下げはここで料金を編集するだけです(過去の売上記録は変わりません)。集計カテゴリは売上グラフの分類と在庫の自動減算に使われます(例:「カット+カラー」→ カラー)。材料原価を入れると粗利率が表示され、値付けの見直しに使えます(美容室の技術メニューは粗利80%以上が目安)。</div>
     </div>`;
 };
 function menuFields(){
   return [
     {key:"name", label:"メニュー名(例: カット+カラー)", type:"text", required:true},
     {key:"price", label:"料金(円・税込)", type:"number", required:true, min:0, half:true},
+    {key:"cost", label:"材料原価(円・任意)", type:"number", min:0, half:true},
     {key:"dur", label:"所要時間(分・任意)", type:"number", min:0, half:true},
     {key:"cat", label:"集計カテゴリ(売上グラフ・在庫減算に使用)", type:"select", options: INCOME_CATS}
   ];
@@ -2208,6 +2231,13 @@ VIEWS.settings = function(){
         <button class="btn pri" onclick="exportBackup()">バックアップを書き出す(JSON)</button>
         <label class="btn" style="cursor:pointer">バックアップを読み込む<input type="file" accept=".json,application/json" style="display:none" onchange="importBackup(this)"></label>
       </div>
+    </div>
+    <div class="card"><h2>スマホでアプリのように使う</h2>
+      <p style="font-size:13px;color:var(--ink2);margin-bottom:4px">ブラウザの「ホーム画面に追加」を使うと、ホーム画面のアイコンからアプリのように起動できます。</p>
+      <ul style="font-size:13px;color:var(--ink2);padding-left:20px">
+        <li><strong>iPhone(Safari)</strong>: 共有ボタン(□↑)→「ホーム画面に追加」</li>
+        <li><strong>Android(Chrome)</strong>: メニュー(⋮)→「ホーム画面に追加」</li>
+      </ul>
     </div>
     <div class="card"><h2>過去実績のまとめ入力</h2>
       <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">
@@ -2295,10 +2325,10 @@ window.seedSample = function(){
   S.orders.push({id: uid(), date: t, supplier:"ビューティーディーラーA", item:"カラー剤 アッシュ8", qty:6, unit:"本", amount:4800, memo:"", status:"draft", invId: i1});
   S.tickets.push({id: uid(), customerId: c1, name:"トリートメント5回券", total:5, used:2, price:20000, date: pm + "-15", memo:""});
   if(!S.menus.length) S.menus.push(
-    {id: uid(), name:"カット", price:4400, cat:"カット", dur:60},
-    {id: uid(), name:"カラー(リタッチ)", price:6600, cat:"カラー", dur:90},
-    {id: uid(), name:"カット+カラー", price:11000, cat:"カラー", dur:150},
-    {id: uid(), name:"カット+パーマ", price:14300, cat:"パーマ", dur:180});
+    {id: uid(), name:"カット", price:4400, cat:"カット", dur:60, cost:100},
+    {id: uid(), name:"カラー(リタッチ)", price:6600, cat:"カラー", dur:90, cost:900},
+    {id: uid(), name:"カット+カラー", price:11000, cat:"カラー", dur:150, cost:1000},
+    {id: uid(), name:"カット+パーマ", price:14300, cat:"パーマ", dur:180, cost:1400});
   save(); toast("サンプルデータを投入しました"); render();
 };
 /* ================= boot ================= */
