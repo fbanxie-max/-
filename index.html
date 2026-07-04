@@ -252,7 +252,7 @@ td.today-col{background:var(--accent-soft)}
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-v1";
 const DEFAULTS = {
-  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "" }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。旧バックアップにはキーが無いため利用側でガードする
+  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same" }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。旧バックアップにはキーが無いため利用側でガードする
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
   tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(支出のみ'10'|'8'|'0'),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
@@ -574,13 +574,34 @@ function breakdownCardsHtml(m){
     </div>
   </div>`;
 }
-function staffMonthHours(staffId, m){ return S.shifts.filter(s => s.staffId === staffId && s.date.startsWith(m)).reduce((a,s) => a + shiftHours(s), 0); }
-function staffMonthSales(staffId, m){ return txInMonth(m).filter(t => t.type === "income" && t.staffId === staffId).reduce((a,t) => a + num(t.amount), 0); }
+/* ---- 給与の締日・支払日 ----
+   旧データ・旧バックアップには設定キーが無いため、既定値(20日締め・当月25日払い)にフォールバックする */
+const payCloseDay = () => { const c = num(S.settings.payClose); return c >= 1 ? Math.min(c, 31) : 20; };
+const paySalaryDay = () => { const d = num(S.settings.payDay); return d >= 1 ? Math.min(d, 31) : 25; };
+const payCloseLabel = () => payCloseDay() >= 31 ? "末日" : payCloseDay() + "日";
+const payDayLabel = () => (S.settings.payMonth === "next" ? "翌月" : "当月") + (paySalaryDay() >= 31 ? "末日" : paySalaryDay() + "日");
+/* 'YYYY-MM'分給与の対象期間 = 前月締日の翌日〜当月締日。締日=末日(31)はカレンダー月と同じ。
+   締日が月の日数を超える月は末日締め扱い(addDaysの繰り上がりで翌月1日始まりになる) */
+function payPeriod(m){
+  const c = payCloseDay();
+  if(c >= 31) return { from: m + "-01", to: m + "-" + String(daysInMonth(m)).padStart(2, "0") };
+  const pm = addMonths(m, -1);
+  return {
+    from: addDays(pm + "-" + String(Math.min(c, daysInMonth(pm))).padStart(2, "0"), 1),
+    to: m + "-" + String(Math.min(c, daysInMonth(m))).padStart(2, "0")
+  };
+}
+/* 'YYYY-MM'分給与の支払日。当月/翌月 × 支払日(月の日数を超える場合は末日) */
+function payDate(m){
+  const pm = S.settings.payMonth === "next" ? addMonths(m, 1) : m;
+  return pm + "-" + String(Math.min(paySalaryDay(), daysInMonth(pm))).padStart(2, "0");
+}
 function calcPay(st, m){
   const adj = S.payAdj[st.id + "_" + m] || {};
-  const hours = staffMonthHours(st.id, m);
+  const pp = payPeriod(m);
+  const hours = S.shifts.filter(s => s.staffId === st.id && s.date >= pp.from && s.date <= pp.to).reduce((a,s) => a + shiftHours(s), 0);
   const base = st.payType === "monthly" ? num(st.wage) : Math.round(hours * num(st.wage));
-  const sales = staffMonthSales(st.id, m);
+  const sales = S.tx.filter(t => t.type === "income" && t.staffId === st.id && t.date >= pp.from && t.date <= pp.to).reduce((a,t) => a + num(t.amount), 0);
   const comm = Math.round(sales * num(st.commission) / 100);
   const total = base + comm + num(adj.allow) - num(adj.deduct);
   return { hours, base, sales, comm, allow: num(adj.allow), deduct: num(adj.deduct), total, paid: !!adj.paid, booked: !!adj.booked, memo: adj.memo || "" };
@@ -1355,8 +1376,9 @@ VIEWS.payroll = function(){
       </td>
     </tr>`;
   }).join("");
+  const pp = payPeriod(m);
   $("main").innerHTML =
-    pageHead("給料管理", "シフトの勤務時間と担当売上から自動計算します",
+    pageHead("給料管理", `${fmtMonth(m)}分 = ${fmtDate(pp.from)}〜${fmtDate(pp.to)}(${payCloseLabel()}締め)・ 支払日 ${fmtDate(payDate(m))}(${payDayLabel()}払い)`,
       `${monthNav(m, "payNav")}<button class="btn" onclick="openPayslips()">給与明細(印刷)</button><button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
     (S.staff.length
       ? `<div class="card"><div class="twrap"><table>
@@ -1364,7 +1386,7 @@ VIEWS.payroll = function(){
           ${rows}
           <tr class="total"><td>合計</td><td></td><td></td><td></td><td></td><td></td><td class="num">${yen(sumTotal)}</td><td></td><td></td></tr>
         </table></div>
-        <div class="hint">基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。</div></div>`
+        <div class="hint">勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。締日・支払日は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</div></div>`
         + productivityHtml(m)
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
 };
@@ -2081,13 +2103,16 @@ window.viewVisitImg = function(custId, visitId){
 window.openPayslips = function(){ go("payslip"); };
 VIEWS.payslip = function(){
   const m = V.payMonth;
+  const pp = payPeriod(m);
   const cards = S.staff.map(st => {
     const p = calcPay(st, m);
     return `<div class="card" style="max-width:560px">
       <h2>給与明細 <span class="h2-sub">${fmtMonth(m)}分</span></h2>
       <div style="font-weight:700;font-size:15px;margin-bottom:8px">${esc(st.name)} 様${st.role ? `(${esc(st.role)})` : ""} ${p.paid ? '<span class="chip good">支払済</span>' : '<span class="chip warn">未払</span>'}</div>
       <div class="twrap"><table>
-        <tr><td style="color:var(--muted);width:200px">勤務時間</td><td class="num">${p.hours.toFixed(1)}h</td></tr>
+        <tr><td style="color:var(--muted);width:200px">対象期間(${payCloseLabel()}締め)</td><td class="num">${fmtDate(pp.from)} 〜 ${fmtDate(pp.to)}</td></tr>
+        <tr><td style="color:var(--muted)">支払日(${payDayLabel()}払い)</td><td class="num">${fmtDate(payDate(m))}</td></tr>
+        <tr><td style="color:var(--muted)">勤務時間</td><td class="num">${p.hours.toFixed(1)}h</td></tr>
         <tr><td style="color:var(--muted)">基本給(${st.payType === "monthly" ? "月給" : "時給 " + yen(st.wage)})</td><td class="num">${yen(p.base)}</td></tr>
         <tr><td style="color:var(--muted)">歩合(担当売上 ${yen(p.sales)} × ${num(st.commission)}%)</td><td class="num">${yen(p.comm)}</td></tr>
         <tr><td style="color:var(--muted)">手当</td><td class="num">${yen(p.allow)}</td></tr>
@@ -2098,7 +2123,7 @@ VIEWS.payslip = function(){
     </div>`;
   }).join("");
   $("main").innerHTML =
-    pageHead("給与明細", `${esc(S.settings.name)} ・ ${fmtMonth(m)}`,
+    pageHead("給与明細", `${esc(S.settings.name)} ・ ${fmtMonth(m)}分(${fmtDate(pp.from)}〜${fmtDate(pp.to)})・ 支払日 ${fmtDate(payDate(m))}`,
       `<button class="btn" onclick="go('payroll')">‹ 給料管理へ</button>${monthNav(m, "payNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button>`) +
     (S.staff.length ? cards : `<div class="card"><div class="empty">スタッフが未登録です</div></div>`);
 };
@@ -2224,6 +2249,16 @@ VIEWS.settings = function(){
         `<div class="alertline">${fmtMonth(mm)} <strong>${yen(v)}</strong> <button class="btn sm ghost" onclick="delMonthTarget('${mm}')">削除</button></div>`).join("")}
       <div class="hint">設定した月はこの目標が優先され、それ以外の月は上の共通目標が使われます。</div>
     </div>
+    <div class="card"><h2>給与の締日・支払日 <span class="h2-sub">現在: ${payCloseLabel()}締め・${payDayLabel()}払い</span></h2>
+      <div class="f-2col" style="max-width:420px">
+        <div class="f-row"><label for="set-pc">締日</label><select id="set-pc">${payDayOptions(payCloseDay())}</select></div>
+        <div class="f-row"><label for="set-pd">支払日</label><select id="set-pd">${payDayOptions(paySalaryDay())}</select></div>
+      </div>
+      <div class="f-row" style="max-width:200px"><label for="set-pm">支払月</label>
+        <select id="set-pm"><option value="same" ${S.settings.payMonth !== "next" ? "selected" : ""}>当月払い</option><option value="next" ${S.settings.payMonth === "next" ? "selected" : ""}>翌月払い</option></select></div>
+      <button class="btn pri" onclick="savePaySchedule()">保存</button>
+      <div class="hint">給料管理・給与明細の対象期間と支払日に反映されます。例: 20日締め・当月25日払いの場合、「7月分」は6/21〜7/20の勤務時間・担当売上で計算し、7/25に支払います。締日を「末日」にすると1日〜末日(カレンダー月)の計算になります。</div>
+    </div>
     <div class="card"><h2>バックアップ</h2>
       <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">
         データはこの端末・ブラウザの中(localStorage)だけに保存されます。機種変更やブラウザのデータ削除に備えて、定期的にバックアップファイルを保存してください。現在の使用量: 約${kb}KB。</p>
@@ -2256,6 +2291,17 @@ window.saveSettings = function(){
   S.settings.name = $("set-name").value || "マイサロン";
   S.settings.target = Math.max(0, num($("set-target").value));
   save(); toast("保存しました"); render();
+};
+/* 締日・支払日の選択肢: 1〜28日+末日(29〜31日は月により存在しないため末日として扱う) */
+function payDayOptions(sel){
+  return Array.from({length: 28}, (_, i) => i + 1).map(d => `<option value="${d}" ${sel === d ? "selected" : ""}>${d}日</option>`).join("")
+    + `<option value="31" ${sel >= 29 ? "selected" : ""}>末日</option>`;
+}
+window.savePaySchedule = function(){
+  S.settings.payClose = num($("set-pc").value) || 20;
+  S.settings.payDay = num($("set-pd").value) || 25;
+  S.settings.payMonth = $("set-pm").value === "next" ? "next" : "same";
+  save(); toast(`給与を${payCloseLabel()}締め・${payDayLabel()}払いに設定しました`); render();
 };
 window.saveMonthTarget = function(){
   const mm = $("set-tm").value;
