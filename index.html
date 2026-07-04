@@ -263,7 +263,8 @@ const DEFAULTS = {
   customers: [],  // {id,name,kana,phone,birthday,memo,visits:[{id,date,menu,staffId,price,note,img}]}
   appts: [],      // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo,dur,nominated,nextApptId}
   closings: {},   // key 'YYYY-MM-DD' -> {float,actual,floatCnt:{金種:枚数},actualCnt,memo,closed} レジ締め
-  tickets: []     // {id,customerId,name,total,used,price,date,memo} 回数券
+  tickets: [],    // {id,customerId,name,total,used,price,date,memo} 回数券
+  menus: []       // {id,name,price,cat,dur} メニュー料金表(組み合わせメニュー可)。catは集計カテゴリ
 };
 let S = loadState();
 function loadState(){
@@ -324,7 +325,7 @@ function fieldHtml(f, val){
       const [v, l] = Array.isArray(o) ? o : [o, o];
       return `<option value="${esc(v)}"${String(v) === String(val) ? " selected" : ""}>${esc(l)}</option>`;
     }).join("");
-    inner = `<select id="${id}">${f.blank ? `<option value="">${esc(f.blank)}</option>` : ""}${opts}</select>`;
+    inner = `<select id="${id}"${f.onchange ? ` onchange="${esc(f.onchange)}"` : ""}>${f.blank ? `<option value="">${esc(f.blank)}</option>` : ""}${opts}</select>`;
   } else if(f.type === "textarea"){
     inner = `<textarea id="${id}">${esc(val)}</textarea>`;
   } else if(f.type === "image"){
@@ -482,6 +483,23 @@ function consumeInv(category){
   });
   return used;
 }
+/* ---- メニュー料金表 ----
+   選択肢 = 料金表のメニュー(価格ラベルつき、値はメニュー名) + 素のカテゴリ(料金表と同名のものは除外)。
+   保存時は menuCat() で集計カテゴリへ解決する(グラフ・在庫減算は従来カテゴリ単位のまま) */
+function menuSelOptions(cats){
+  return [
+    ...S.menus.map(mn => [mn.name, `${mn.name}(${yen(mn.price)})`]),
+    ...cats.filter(c => !S.menus.some(mn => mn.name === c)).map(c => [c, c])
+  ];
+}
+const menuCat = name => { const mn = S.menus.find(x => x.name === name); return mn ? (mn.cat || "その他収入") : name; };
+/* メニュー選択時に料金(と所要時間)をフォームへ自動反映。手入力での上書きは自由 */
+window.menuPick = function(sel, amtId, durId){
+  const mn = S.menus.find(x => x.name === sel.value);
+  if(!mn) return;
+  const amt = $(amtId); if(amt) amt.value = num(mn.price);
+  if(durId){ const d = $(durId); if(d && num(mn.dur) > 0) d.value = num(mn.dur); }
+};
 /* 同一担当・同日の時間帯重複(status openのみ対象)。所要時間未設定は60分扱い */
 function apptConflict(v, excludeId){
   if(!v.staffId) return null;
@@ -559,6 +577,7 @@ const NAV = [
   {id:"follow", label:"フォローリスト"},
   {id:"tickets", label:"回数券"},
   {sec:"その他"},
+  {id:"menus", label:"メニュー料金表"},
   {id:"settings", label:"設定・バックアップ"}
 ];
 let cur = "dash";
@@ -997,7 +1016,9 @@ function txFields(type){
   return [
     {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
     {key:"amount", label:"金額(円)", type:"number", required:true, min:0, half:true},
-    {key:"category", label:"カテゴリ", type:"select", options: type === "income" ? INCOME_CATS : EXPENSE_CATS},
+    type === "income"
+      ? {key:"category", label:"メニュー/カテゴリ(料金表から選ぶと金額が自動入力)", type:"select", options: menuSelOptions(INCOME_CATS), onchange:"menuPick(this,'ff-amount')"}
+      : {key:"category", label:"カテゴリ", type:"select", options: EXPENSE_CATS},
     ...(type === "income"
       ? [{key:"pay", label:"支払方法(レジ締めの集計に使用)", type:"select", options: PAY_METHODS}]
       : [{key:"taxRate", label:"税区分(申告用CSVに出力)", type:"select", options: TAX_OPTS}]),
@@ -1008,15 +1029,19 @@ function txFields(type){
 window.addTx = function(type){
   openForm({ title: type === "income" ? "収入を記録" : "支出を記録", fields: txFields(type),
     onsave: v => {
-      S.tx.push({id: uid(), type, ...v});
-      const used = type === "income" ? consumeInv(v.category) : [];
+      const cat = type === "income" ? menuCat(v.category) : v.category;
+      S.tx.push({id: uid(), type, ...v, category: cat});
+      const used = type === "income" ? consumeInv(cat) : [];
       save(); toast(used.length ? `記録しました(在庫減算: ${used.join("、")})` : "記録しました"); render();
     } });
 };
 window.editTx = function(id){
   const t = S.tx.find(x => x.id === id); if(!t) return;
   openForm({ title:"記録を編集", fields: txFields(t.type), data: t,
-    onsave: v => { Object.assign(t, v); save(); toast("更新しました"); render(); } });
+    onsave: v => {
+      if(t.type === "income") v.category = menuCat(v.category);
+      Object.assign(t, v); save(); toast("更新しました"); render();
+    } });
 };
 window.delTx = function(id){
   ask("この記録を削除しますか?", () => { S.tx = S.tx.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
@@ -1502,7 +1527,7 @@ window.addVisit = function(custId){
     fields: [
       {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
       {key:"price", label:"金額(円)", type:"number", min:0, half:true},
-      {key:"menu", label:"メニュー", type:"select", options: INCOME_CATS.slice(0,-1)},
+      {key:"menu", label:"メニュー(料金表から選ぶと金額が自動入力)", type:"select", options: menuSelOptions(INCOME_CATS.slice(0,-1)), onchange:"menuPick(this,'ff-price')"},
       {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
       {key:"note", label:"施術メモ(薬剤・カラーレシピなど)", type:"textarea"},
       {key:"img", label:"施術写真", type:"image"},
@@ -1512,7 +1537,7 @@ window.addVisit = function(custId){
       const {book, ...visit} = v;
       c.visits.push({id: uid(), ...visit});
       if(book === "yes" && num(visit.price) > 0)
-        S.tx.push({id: uid(), type:"income", date: visit.date, category: visit.menu, amount: num(visit.price), memo: `${c.name}様`, staffId: visit.staffId, pay:"現金"});
+        S.tx.push({id: uid(), type:"income", date: visit.date, category: menuCat(visit.menu), amount: num(visit.price), memo: `${c.name}様`, staffId: visit.staffId, pay:"現金"});
       save(); toast("来店を記録しました"); render();
     } });
 };
@@ -1581,7 +1606,7 @@ function apptFields(){
     {key:"date", label:"日付", type:"date", value: V.apptDate, required:true, half:true},
     {key:"time", label:"時刻", type:"time", value:"10:00", required:true, half:true},
     {key:"name", label:"お客様名", type:"text", required:true},
-    {key:"menu", label:"メニュー", type:"select", options: INCOME_CATS.slice(0,-1)},
+    {key:"menu", label:"メニュー(料金表から選ぶと金額・所要時間が自動入力)", type:"select", options: menuSelOptions(INCOME_CATS.slice(0,-1)), onchange:"menuPick(this,'ff-price','ff-dur')"},
     {key:"staffId", label:"担当", type:"select", blank:"(未定)", options: S.staff.map(s => [s.id, s.name])},
     {key:"dur", label:"所要時間(分)", type:"number", value:60, min:0, half:true},
     {key:"nominated", label:"指名", type:"select", options:[["","フリー"],["1","指名"]], half:true},
@@ -1620,11 +1645,11 @@ window.checkinAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
   openForm({ title: `${a.name} 様の来店処理(会計)`,
     fields: [
-      {key:"category", label:"メニュー1(売上カテゴリ)", type:"select", options: INCOME_CATS, value: a.menu, half:true},
+      {key:"category", label:"メニュー1(料金表から選ぶと金額が自動入力)", type:"select", options: menuSelOptions(INCOME_CATS), value: a.menu, onchange:"menuPick(this,'ff-amount')", half:true},
       {key:"amount", label:"金額1(円)", type:"number", value: a.price || "", required:true, min:0, half:true},
-      {key:"menu2", label:"メニュー2(任意)", type:"select", blank:"(なし)", options: INCOME_CATS, half:true},
+      {key:"menu2", label:"メニュー2(任意)", type:"select", blank:"(なし)", options: menuSelOptions(INCOME_CATS), onchange:"menuPick(this,'ff-amount2')", half:true},
       {key:"amount2", label:"金額2(円)", type:"number", min:0, half:true},
-      {key:"menu3", label:"メニュー3(任意)", type:"select", blank:"(なし)", options: INCOME_CATS, half:true},
+      {key:"menu3", label:"メニュー3(任意)", type:"select", blank:"(なし)", options: menuSelOptions(INCOME_CATS), onchange:"menuPick(this,'ff-amount3')", half:true},
       {key:"amount3", label:"金額3(円)", type:"number", min:0, half:true},
       {key:"pay", label:"支払方法", type:"select", options: PAY_METHODS, half:true},
       {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name]), value: a.staffId, half:true},
@@ -1635,13 +1660,15 @@ window.checkinAppt = function(id){
     ], saveLabel:"会計を確定",
     onsave: v => {
       a.status = "done";
-      /* 複数メニューは同じ会計(saleId)として記録し、客数・客単価は1会計=1客で数える */
+      /* 複数メニューは同じ会計(saleId)として記録し、客数・客単価は1会計=1客で数える。
+         料金表メニューは集計カテゴリへ解決して売上計上、カルテにはメニュー名のまま残す */
       const saleId = uid();
       const lines = [[v.category, num(v.amount)]];
       if(v.menu2 && num(v.amount2) > 0) lines.push([v.menu2, num(v.amount2)]);
       if(v.menu3 && num(v.amount3) > 0) lines.push([v.menu3, num(v.amount3)]);
       let used = [];
-      lines.forEach(([cat, amt]) => {
+      lines.forEach(([name, amt]) => {
+        const cat = menuCat(name);
         S.tx.push({id: uid(), saleId, type:"income", date: a.date, category: cat, amount: amt, memo: `${a.name}様`, staffId: v.staffId, pay: v.pay});
         used = used.concat(consumeInv(cat));
       });
@@ -1886,6 +1913,52 @@ VIEWS.payslip = function(){
       `<button class="btn" onclick="go('payroll')">‹ 給料管理へ</button>${monthNav(m, "payNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button>`) +
     (S.staff.length ? cards : `<div class="card"><div class="empty">スタッフが未登録です</div></div>`);
 };
+/* ================= menu price list (メニュー料金表) ================= */
+VIEWS.menus = function(){
+  const list = S.menus;
+  $("main").innerHTML =
+    pageHead("メニュー料金表", "登録したメニューは売上記録・会計・予約の選択肢に価格つきで表示され、金額が自動入力されます",
+      `<button class="btn pri" onclick="addMenu()">+ メニューを追加</button>`) +
+    `<div class="card"><div class="twrap">${list.length ? `<table>
+      <tr><th>メニュー名</th><th class="num">料金</th><th>集計カテゴリ</th><th class="num">所要時間</th><th></th></tr>
+      ${list.map(mn => `<tr>
+        <td style="font-weight:600">${esc(mn.name)}</td>
+        <td class="num" style="font-weight:600">${yen(mn.price)}</td>
+        <td><span class="chip mut">${esc(mn.cat || "その他収入")}</span></td>
+        <td class="num">${num(mn.dur) ? num(mn.dur) + "分" : "—"}</td>
+        <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editMenu('${mn.id}')">編集</button><button class="btn sm ghost" onclick="delMenu('${mn.id}')">削除</button></td>
+      </tr>`).join("")}</table>` : `<div class="empty">メニューが未登録です。「カット ¥4,000」「カット+カラー ¥8,000」のように、組み合わせメニューも自由に登録できます。</div>`}</div>
+      <div class="hint">値上げ・値下げはここで料金を編集するだけです(過去の売上記録は変わりません)。集計カテゴリは売上グラフの分類と在庫の自動減算に使われます(例:「カット+カラー」→ カラー)。</div>
+    </div>`;
+};
+function menuFields(){
+  return [
+    {key:"name", label:"メニュー名(例: カット+カラー)", type:"text", required:true},
+    {key:"price", label:"料金(円・税込)", type:"number", required:true, min:0, half:true},
+    {key:"dur", label:"所要時間(分・任意)", type:"number", min:0, half:true},
+    {key:"cat", label:"集計カテゴリ(売上グラフ・在庫減算に使用)", type:"select", options: INCOME_CATS}
+  ];
+}
+window.addMenu = function(){
+  openForm({ title:"メニューを追加", fields: menuFields(),
+    onsave: v => {
+      if(S.menus.some(mn => mn.name === v.name)){ toast("同じ名前のメニューがすでにあります"); return; }
+      S.menus.push({id: uid(), ...v}); save(); toast("追加しました"); render();
+    } });
+};
+window.editMenu = function(id){
+  const mn = S.menus.find(x => x.id === id); if(!mn) return;
+  openForm({ title:"メニューを編集", fields: menuFields(), data: mn,
+    onsave: v => {
+      if(S.menus.some(x => x.id !== id && x.name === v.name)){ toast("同じ名前のメニューがすでにあります"); return; }
+      Object.assign(mn, v); save(); toast("更新しました"); render();
+    } });
+};
+window.delMenu = function(id){
+  ask("このメニューを削除しますか?(過去の記録はそのまま残ります)", () => {
+    S.menus = S.menus.filter(x => x.id !== id); save(); toast("削除しました"); render();
+  });
+};
 /* ================= settings ================= */
 VIEWS.settings = function(){
   let bytes = 0;
@@ -1976,6 +2049,11 @@ window.seedSample = function(){
     {id: uid(), date: t, time:"16:30", name:"新規 太郎", menu:"カット", staffId: s2, price:3800, status:"open", dur:60, nominated:"", memo:""});
   S.orders.push({id: uid(), date: t, supplier:"ビューティーディーラーA", item:"カラー剤 アッシュ8", qty:6, unit:"本", amount:4800, memo:"", status:"draft", invId: i1});
   S.tickets.push({id: uid(), customerId: c1, name:"トリートメント5回券", total:5, used:2, price:20000, date: pm + "-15", memo:""});
+  if(!S.menus.length) S.menus.push(
+    {id: uid(), name:"カット", price:4400, cat:"カット", dur:60},
+    {id: uid(), name:"カラー(リタッチ)", price:6600, cat:"カラー", dur:90},
+    {id: uid(), name:"カット+カラー", price:11000, cat:"カラー", dur:150},
+    {id: uid(), name:"カット+パーマ", price:14300, cat:"パーマ", dur:180});
   save(); toast("サンプルデータを投入しました"); render();
 };
 /* ================= boot ================= */
