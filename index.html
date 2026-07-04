@@ -254,7 +254,7 @@ const LS_KEY = "salon-mgr-v1";
 const DEFAULTS = {
   settings: { name: "マイサロン", target: 0 }, // target: 月間売上目標(円)。旧バックアップにはこのキーが無いため利用側は num()>0 で判定する
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
-  tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(支出のみ'10'|'8'|'0')}
+  tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(支出のみ'10'|'8'|'0'),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
   shifts: [],     // {id,staffId,date,start,end,brk,note}
   payAdj: {},     // key `${staffId}_${month}` -> {allow,deduct,memo,paid,booked}
@@ -585,7 +585,7 @@ const V = {}; // view state
 V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth(); V.reportMonth = thisMonth(); V.reportsMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
-V.closeDate = todayStr(); V.lostDays = 60;
+V.closeDate = todayStr(); V.lostDays = 60; V.bulkN = 24;
 V.orderFilter = "all"; V.custSel = null; V.custQ = ""; V.chartN = 6;
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
 function render(){
@@ -882,7 +882,8 @@ VIEWS.reports = function(){
   /* 月報: 直近12ヶ月のうち取引がある月(当月は常に表示) */
   const months = lastMonths(12).filter(mm => mm === thisMonth() || txInMonth(mm).length).reverse();
   $("main").innerHTML =
-    pageHead("レポート一覧", "日報と月報をまとめて確認できます。行をクリックすると詳細へ移動します") +
+    pageHead("レポート一覧", "日報と月報をまとめて確認できます。行をクリックすると詳細へ移動します",
+      `<button class="btn" onclick="openBulk()">過去実績のまとめ入力</button>`) +
     `<div class="card"><h2>日報一覧 ${monthNav(m, "reportsNav")} <button class="btn sm" onclick="exportDailyCsv()">CSV出力</button></h2>
       <div class="twrap">${days.length ? `<table>
         <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th class="num">客単価</th><th class="num">支出</th><th class="num">差引</th><th>レジ締め</th></tr>
@@ -1913,6 +1914,55 @@ VIEWS.payslip = function(){
       `<button class="btn" onclick="go('payroll')">‹ 給料管理へ</button>${monthNav(m, "payNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button>`) +
     (S.staff.length ? cards : `<div class="card"><div class="empty">スタッフが未登録です</div></div>`);
 };
+/* ================= bulk past-data entry (過去実績まとめ入力・ナビ非掲載) ================= */
+window.openBulk = function(){ go("bulk"); };
+window.bulkMore = function(){ V.bulkN = Math.min(60, V.bulkN + 12); render(); };
+VIEWS.bulk = function(){
+  /* 前月から過去N件(今月は日々の入力と二重になるため対象外) */
+  const months = lastMonths(V.bulkN + 1, thisMonth()).slice(0, -1).reverse();
+  const rows = months.map(m => {
+    const list = txInMonth(m);
+    const amt = (type, isBulk) => list.filter(t => t.type === type && !!t.bulk === isBulk).reduce((a,t) => a + num(t.amount), 0);
+    const bulkInc = amt("income", true), bulkExp = amt("expense", true);
+    const normInc = amt("income", false), normExp = amt("expense", false);
+    return `<tr>
+      <td style="white-space:nowrap;font-weight:600">${fmtMonth(m)}</td>
+      <td class="num"><input id="bi-${m}" type="number" inputmode="numeric" min="0" value="${bulkInc || ""}" style="max-width:130px;text-align:right" aria-label="${fmtMonth(m)}の売上合計"></td>
+      <td class="num"><input id="be-${m}" type="number" inputmode="numeric" min="0" value="${bulkExp || ""}" style="max-width:130px;text-align:right" aria-label="${fmtMonth(m)}の経費合計"></td>
+      <td class="num" style="color:var(--muted);font-size:12px;white-space:nowrap">${normInc || normExp ? `${yen(normInc)} / ${yen(normExp)}` : "—"}</td>
+    </tr>`;
+  }).join("");
+  $("main").innerHTML =
+    pageHead("過去実績のまとめ入力", "月ごとの売上・経費の合計を入れるだけで、グラフ・前年対比・月報に反映されます",
+      `<button class="btn" onclick="go('reports')">‹ レポート一覧へ</button><button class="btn pri" onclick="saveBulk()">まとめて保存</button>`) +
+    `<div class="card"><div class="twrap"><table>
+      <tr><th>月</th><th class="num">売上合計(円)</th><th class="num">経費合計(円)</th><th class="num">通常入力済(売上/経費)</th></tr>
+      ${rows}
+    </table></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" onclick="bulkMore()" ${V.bulkN >= 60 ? "disabled" : ""}>さらに過去12ヶ月を表示</button><button class="btn pri" onclick="saveBulk()">まとめて保存</button></div>
+    <div class="hint">・カテゴリ「過去実績」の記録として月1件で保存されます。金額を変えて保存すると上書き、空欄にして保存すると削除されます。<br>
+    ・「通常入力済」に金額がある月はすでに日々の記録があります。二重計上にならないよう、その月は空欄のままにするか差額だけ入れてください。<br>
+    ・まとめ入力した月は合計のみの記録のため、客数・客単価・支払方法別(レジ締め)の集計は参考値になりません。</div></div>`;
+};
+window.saveBulk = function(){
+  const months = lastMonths(V.bulkN + 1, thisMonth()).slice(0, -1);
+  let changed = 0;
+  months.forEach(m => {
+    [["bi", "income"], ["be", "expense"]].forEach(([p, type]) => {
+      const el = $(`${p}-${m}`); if(!el) return;
+      const val = Math.max(0, num(el.value));
+      const existing = S.tx.filter(t => t.bulk && t.type === type && t.date && t.date.startsWith(m));
+      const existAmt = existing.reduce((a,t) => a + num(t.amount), 0);
+      if(val === existAmt) return;
+      S.tx = S.tx.filter(t => !(t.bulk && t.type === type && t.date && t.date.startsWith(m)));
+      if(val > 0) S.tx.push(type === "income"
+        ? {id: uid(), bulk: true, type, date: m + "-15", category: "過去実績", amount: val, memo: "まとめ入力", staffId: "", pay: "その他"}
+        : {id: uid(), bulk: true, type, date: m + "-15", category: "過去実績", amount: val, memo: "まとめ入力", staffId: "", taxRate: "10"});
+      changed++;
+    });
+  });
+  save(); toast(changed ? `${changed}件の月次実績を保存しました` : "変更はありませんでした"); render();
+};
 /* ================= menu price list (メニュー料金表) ================= */
 VIEWS.menus = function(){
   const list = S.menus;
@@ -1981,6 +2031,11 @@ VIEWS.settings = function(){
         <button class="btn pri" onclick="exportBackup()">バックアップを書き出す(JSON)</button>
         <label class="btn" style="cursor:pointer">バックアップを読み込む<input type="file" accept=".json,application/json" style="display:none" onchange="importBackup(this)"></label>
       </div>
+    </div>
+    <div class="card"><h2>過去実績のまとめ入力</h2>
+      <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">
+        使い始める前の月の売上・経費を、1日ずつではなく<strong>月ごとの合計</strong>でまとめて登録できます。グラフや前年対比にすぐ反映されます。</p>
+      <button class="btn pri" onclick="openBulk()">まとめ入力画面を開く</button>
     </div>
     <div class="card"><h2>お試し</h2>
       <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">動作を確認したいときはサンプルデータを投入できます(既存データはそのまま残ります)。</p>
