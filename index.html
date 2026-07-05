@@ -284,18 +284,54 @@ const DEFAULTS = {
   menus: [],      // {id,name,price,cat,dur,cost} メニュー料金表(組み合わせメニュー可)。catは集計カテゴリ、costは材料原価(任意)
   recurring: []   // {id,name,amount,category,taxRate,day,startM,lastM} 定期支出(毎月自動計上)。lastM=計上済みの最終月
 };
-let S = loadState();
-function loadState(){
+let S = structuredClone(DEFAULTS); // 末尾のboot()で読み込み後に置き換える
+/* ---- 保存層 ----
+   主: IndexedDB(数百MB規模。写真を多く保存できる)
+   従: localStorage(約5MB。IndexedDBが使えない環境のフォールバック)
+   旧バージョンのlocalStorageデータは初回起動時にIndexedDBへ自動移行する(元データは万一に備えて残す) */
+const IDB_NAME = "salon-mgr", IDB_STORE = "state";
+let _idb = null, _lsMode = false, _idbWriting = false, _idbDirty = false;
+function idbOpen(){
+  return new Promise((res, rej) => {
+    if(!window.indexedDB) return rej(new Error("no indexedDB"));
+    const rq = indexedDB.open(IDB_NAME, 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore(IDB_STORE);
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+    rq.onblocked = () => rej(new Error("blocked"));
+  });
+}
+const idbGet = () => new Promise((res, rej) => { const rq = _idb.transaction(IDB_STORE).objectStore(IDB_STORE).get("S"); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+const idbPut = v => new Promise((res, rej) => { const rq = _idb.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).put(v, "S"); rq.onsuccess = () => res(); rq.onerror = () => rej(rq.error); });
+function loadStateLS(){
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(!raw) return structuredClone(DEFAULTS);
-    const d = JSON.parse(raw);
-    return Object.assign(structuredClone(DEFAULTS), d);
+    return Object.assign(structuredClone(DEFAULTS), JSON.parse(raw));
   }catch(e){ return structuredClone(DEFAULTS); }
 }
+async function loadState(){
+  try{
+    _idb = await idbOpen();
+    const d = await idbGet();
+    if(d && typeof d === "object") return Object.assign(structuredClone(DEFAULTS), d);
+    const migrated = loadStateLS();
+    await idbPut(migrated);
+    return migrated;
+  }catch(e){ _lsMode = true; return loadStateLS(); }
+}
 function save(){
-  try{ localStorage.setItem(LS_KEY, JSON.stringify(S)); }
-  catch(e){ toast("保存に失敗しました。容量不足の可能性があります(設定→バックアップ参照)"); }
+  if(_lsMode){
+    try{ localStorage.setItem(LS_KEY, JSON.stringify(S)); }
+    catch(e){ toast("保存に失敗しました。容量不足の可能性があります(設定→バックアップ参照)"); }
+    return;
+  }
+  /* 書き込み中に再度呼ばれたら、完了後にその時点の最新Sをもう一度書く(取りこぼし防止) */
+  if(_idbWriting){ _idbDirty = true; return; }
+  _idbWriting = true;
+  idbPut(S)
+    .catch(() => toast("保存に失敗しました。端末の空き容量を確認してください(設定→バックアップ参照)"))
+    .finally(() => { _idbWriting = false; if(_idbDirty){ _idbDirty = false; save(); } });
 }
 /* ================= helpers ================= */
 const $ = id => document.getElementById(id);
@@ -2261,8 +2297,8 @@ window.delMenu = function(id){
 /* ================= settings ================= */
 VIEWS.settings = function(){
   let bytes = 0;
-  try{ bytes = (localStorage.getItem(LS_KEY) || "").length * 2; }catch(e){}
-  const kb = (bytes/1024).toFixed(0);
+  try{ bytes = JSON.stringify(S).length; }catch(e){}
+  const kb = bytes >= 1048576 ? (bytes/1048576).toFixed(1) + "MB" : (bytes/1024).toFixed(0) + "KB";
   $("main").innerHTML =
     pageHead("設定・バックアップ", "") +
     `<div class="card"><h2>店舗設定</h2>
@@ -2308,7 +2344,8 @@ VIEWS.settings = function(){
     </div>
     <div class="card"><h2>バックアップ</h2>
       <p style="font-size:13px;color:var(--ink2);margin-bottom:10px">
-        データはこの端末・ブラウザの中(localStorage)だけに保存されます。機種変更やブラウザのデータ削除に備えて、定期的にバックアップファイルを保存してください。現在の使用量: 約${kb}KB。</p>
+        データはこの端末・ブラウザの中だけに保存されます(IndexedDB方式。施術写真・領収書写真もたっぷり保存できます)。機種変更やブラウザのデータ削除に備えて、定期的にバックアップファイルを保存してください。<br>
+        現在の使用量: 約${kb}${_lsMode ? "(この環境は簡易保存モード・上限約5MB)" : ` ・ 保存できる残り容量の目安: <span id="quota-est">計算中…</span>`}</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn pri" onclick="exportBackup()">バックアップを書き出す(JSON)</button>
         <label class="btn" style="cursor:pointer">バックアップを読み込む<input type="file" accept=".json,application/json" style="display:none" onchange="importBackup(this)"></label>
@@ -2333,6 +2370,14 @@ VIEWS.settings = function(){
     <div class="card"><h2 style="color:var(--crit)">データの初期化</h2>
       <button class="btn danger" onclick="wipeAll()">全データを削除</button>
     </div>`;
+  /* 残り容量の目安(対応ブラウザのみ)。数百MB〜数GBが一般的 */
+  try{
+    if(!_lsMode && navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(est => {
+      const el = $("quota-est"); if(!el || !est || !est.quota) return;
+      const free = Math.max(0, est.quota - (est.usage || 0));
+      el.textContent = free >= 1073741824 ? (free/1073741824).toFixed(1) + "GB" : Math.round(free/1048576).toLocaleString() + "MB";
+    }).catch(() => {});
+  }catch(e){}
 };
 window.saveSettings = function(){
   S.settings.name = $("set-name").value || "マイサロン";
@@ -2401,7 +2446,9 @@ window.importBackup = function(input){
 };
 window.wipeAll = function(){
   ask("すべてのデータを完全に削除します。よろしいですか?(元に戻せません)", () => {
-    S = structuredClone(DEFAULTS); save(); toast("初期化しました"); render();
+    S = structuredClone(DEFAULTS); save();
+    try{ localStorage.removeItem(LS_KEY); }catch(e){} // 移行前の旧データも消す
+    toast("初期化しました"); render();
   });
 };
 window.seedSample = function(){
@@ -2443,9 +2490,15 @@ window.seedSample = function(){
   save(); toast("サンプルデータを投入しました"); render();
 };
 /* ================= boot ================= */
-const _recN = applyRecurring();
-render();
-if(_recN) toast(`定期支出${_recN}件を自動計上しました`);
+(async () => {
+  S = await loadState();
+  /* ブラウザに保存領域の恒久化を依頼(容量逼迫時の自動削除対象になりにくくする) */
+  try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); }catch(e){}
+  const _recN = applyRecurring();
+  render();
+  if(_recN) toast(`定期支出${_recN}件を自動計上しました`);
+  window.__booted = true; // 自動テスト用: 読み込み完了の合図
+})();
 </script>
 </body>
 </html>
