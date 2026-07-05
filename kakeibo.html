@@ -14,7 +14,7 @@
 <style>
 :root{
   --bg:#f6f5f1; --surface:#fdfdfb; --surface2:#efeee8;
-  --ink:#1c1a17; --ink2:#57534c; --muted:#8b877e;
+  --ink:#1c1a17; --ink2:#57534c; --muted:#77736a;
   --line:#e4e2da; --line2:#d6d4ca;
   --accent:#0e7a63; --accent-hover:#0a6350; --accent-ink:#ffffff; --accent-soft:#e2f1ec;
   --income:#2a78d6; --expense:#d64c3a; --special:#8a5cc9; --special-chip:#f0e9fa;
@@ -38,7 +38,7 @@
 }
 :root[data-theme="light"]{
   --bg:#f6f5f1; --surface:#fdfdfb; --surface2:#efeee8;
-  --ink:#1c1a17; --ink2:#57534c; --muted:#8b877e;
+  --ink:#1c1a17; --ink2:#57534c; --muted:#77736a;
   --line:#e4e2da; --line2:#d6d4ca;
   --accent:#0e7a63; --accent-hover:#0a6350; --accent-ink:#ffffff; --accent-soft:#e2f1ec;
   --income:#2a78d6; --expense:#d64c3a; --special:#8a5cc9; --special-chip:#f0e9fa;
@@ -190,7 +190,7 @@ table.x thead th{background:var(--surface2);position:sticky;top:0}
 .slist .si .grow{flex:1;min-width:0}
 .slist .si .nm{font-size:.92rem}
 .slist .si .sub{font-size:.75rem;color:var(--muted)}
-.iconbtn{padding:5px 9px;border:1px solid var(--line);border-radius:9px;background:var(--surface);font-size:.85rem;color:var(--ink2)}
+.iconbtn{padding:8px 10px;min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:9px;background:var(--surface);font-size:.85rem;color:var(--ink2)}
 .iconbtn:active{background:var(--surface2)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--accent);color:var(--accent-ink);
   border-radius:12px;padding:9px 16px;font-weight:600;font-size:.9rem}
@@ -212,10 +212,10 @@ table.x thead th{background:var(--surface2);position:sticky;top:0}
 .frm .hrow{display:flex;gap:8px}.frm .hrow>label{flex:1}
 /* ===== toast ===== */
 #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(78px + env(safe-area-inset-bottom));
-  z-index:50;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 16px;font-size:.86rem;
+  z-index:50;background:#26241f;color:#f6f5f1;border-radius:12px;padding:10px 16px;font-size:.86rem;
   display:none;align-items:center;gap:12px;max-width:92vw;box-shadow:var(--shadow)}
 #toast.show{display:flex}
-#toast button{color:var(--warn);font-weight:700;white-space:nowrap}
+#toast button{color:#ffc457;font-weight:700;white-space:nowrap}
 .empty{color:var(--muted);text-align:center;padding:18px 0;font-size:.85rem}
 .flowbar{display:flex;height:14px;border-radius:99px;overflow:hidden;margin:8px 0 4px;background:var(--surface2)}
 .flowbar i{display:block;height:100%}
@@ -287,25 +287,37 @@ function defaultData(){
   };
 }
 function load(){
+  let raw = null;
+  try{ raw = localStorage.getItem(LS_KEY); }catch(e){}
+  if(!raw) return defaultData();
   try{
-    const raw = localStorage.getItem(LS_KEY);
-    if(!raw) return defaultData();
     const d = JSON.parse(raw);
     const base = defaultData();
+    const defMembers = base.settings.members.slice(); // assignで上書きされる前に確保
     d.settings = Object.assign(base.settings, d.settings||{});
-    for(const k of ['categories','transactions','recurrings','quickEntries','goals','savingTxs'])
+    if(!Array.isArray(d.settings.members) || !d.settings.members.length) d.settings.members = defMembers;
+    d.settings.members = d.settings.members.map(String);
+    for(const k of ['categories','transactions','recurrings','quickEntries','goals','savingTxs']){
       if(!Array.isArray(d[k])) d[k] = (k==='categories') ? base.categories : [];
-    if(!Array.isArray(d.buckets) || !d.buckets.length) d.buckets = defaultBuckets(d.settings.members);
+      d[k] = d[k].filter(Boolean); // 部分破損(null混入)したバックアップへの防御
+    }
+    // v2以降はバケット空(=振り分け機能を使わない)を尊重し、v1からの移行時のみ生成
+    if(!Array.isArray(d.buckets)) d.buckets = (d.v||1) < 2 ? defaultBuckets(d.settings.members) : [];
+    d.buckets = d.buckets.filter(Boolean);
     if((d.v||1) < 2){ // v1 -> v2: 貯金目標の積立を貯金台帳(savingTxs)へ移行
       for(const g of d.goals){
-        for(const dep of (g.deposits||[]))
+        for(const dep of (Array.isArray(g.deposits) ? g.deposits : []))
           d.savingTxs.push({id:dep.id||uid(), date:dep.date, amount:dep.amount, memo:dep.memo||'', goalId:g.id});
         delete g.deposits;
       }
     }
     d.v = 2;
     return d;
-  }catch(e){ return defaultData(); }
+  }catch(e){
+    // 読めないデータで上書き保存して消してしまわないよう、救出コピーを残す
+    try{ localStorage.setItem(LS_KEY + '-rescue', raw); }catch(_){}
+    return defaultData();
+  }
 }
 function save(){ localStorage.setItem(LS_KEY, JSON.stringify(S)); }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -410,6 +422,7 @@ function syncAllocSavings(tx){ // 収入txの振り分け → 貯金台帳を作
 function applySplits(amount, splits){ // ルールを収入額に収まるようにclampしてallocへ
   let remain = amount; const alloc = [];
   for(const sp of (splits||[])){
+    if(!bucketById(sp.bucketId)) continue; // 削除済みバケットの残骸は無視
     const amt = Math.min(sp.amount, remain);
     if(amt > 0){ alloc.push({bucketId:sp.bucketId, amount:amt, goalId:sp.goalId || undefined}); remain -= amt; }
   }
@@ -588,8 +601,12 @@ function saveTx(catId){
   }
   if(cat && cat.type === 'income'){
     renderInput();
-    toast(msg);
-    if(S.buckets.length) openAllocSheet(tx.id);
+    // 振り分けの前回値がある収入(給与など)はシートを自動で開く。
+    // それ以外(メルカリ売上などの単発収入)はトーストから任意で開ける。
+    const hasPreset = ((S.settings.lastAlloc||{})[tx.categoryId]||[]).length > 0;
+    if(S.buckets.length && hasPreset) openAllocSheet(tx.id);
+    else if(S.buckets.length) toast(msg, '💰 振り分ける', () => openAllocSheet(tx.id));
+    else toast(msg);
     return;
   }
   toast(msg, '☆定番に登録', () => quickFromTx(tx.id));
@@ -606,7 +623,8 @@ function openAllocSheet(txId){
   const goalOpts = sel => '<option value="">目標を選ばない</option>' +
     S.goals.map(g => `<option value="${g.id}" ${sel===g.id?'selected':''}>🎯 ${esc(g.name)}</option>`).join('');
   openModal('収入の振り分け', `
-  <div class="small muted" style="margin-bottom:8px">${mdLabel(t.date)} ${esc(catById(t.categoryId)?.name||'')} <b style="color:var(--income)">${yen(t.amount)}</b> をどこに回しますか?残りは自動で家計(生活費)になります。</div>
+  <div class="small muted" style="margin-bottom:4px">${mdLabel(t.date)} ${esc(catById(t.categoryId)?.name||'')} <b style="color:var(--income)">${yen(t.amount)}</b> をどこに回しますか?残りは自動で家計(生活費)になります。</div>
+  <div class="small muted" style="margin-bottom:8px">💡 給料を先に貯金やお小遣いに取り分けておく「袋分け」ができます。あとから記録の編集でいつでも変更できます。</div>
   <form class="frm" id="allocForm">
     ${S.buckets.map(b => `
       <div class="hrow" style="align-items:flex-end">
@@ -628,6 +646,7 @@ function openAllocSheet(txId){
     const el = $('#allocRest');
     el.textContent = yen(rest);
     el.style.color = rest < 0 ? 'var(--crit)' : '';
+    $('#allocForm button[type="submit"]').textContent = s > 0 ? 'この内容で振り分ける' : '全額を家計にする';
     return rest;
   };
   upd();
@@ -740,9 +759,11 @@ function renderHome(){
     const hh = m.income - allocSum;             // 家計に入れた額
     const totalExp = m.expense + m.special;     // 実際の支出
     const hhRest = hh - totalExp;               // 家計の残り
-    const bColor = b => b.kind === 'saving' ? 'var(--accent)' : 'var(--special)';
+    const ALW_COLORS = ['var(--special)', '#e0851f', '#c76d7e']; // お小遣いは人ごとに色分け
+    let ai = 0;
     const segs = S.buckets.filter(b => allocPer[b.id] > 0)
-      .map(b => ({name:b.name, icon:b.kind==='saving'?'💰':'👛', v:allocPer[b.id], c:bColor(b)}));
+      .map(b => ({name:b.name, icon:b.kind==='saving'?'💰':'👛', v:allocPer[b.id],
+        c: b.kind === 'saving' ? 'var(--accent)' : ALW_COLORS[ai++ % ALW_COLORS.length]}));
     segs.push({name:'家計(生活費)へ', icon:'🏠', v:hh, c:'var(--income)'});
     flowCard = `<div class="card">
       <div class="spread"><b>今月のお金の流れ</b><span class="small muted">収入 ${yen(m.income)}</span></div>
@@ -752,10 +773,10 @@ function renderHome(){
       <div style="border-top:1px dashed var(--line);margin-top:6px;padding-top:6px">
         <div class="flowrow"><span class="sw" style="background:var(--expense)"></span>
           <span class="nm">🛒 家計からの支出</span><span class="am">${yen(totalExp)}</span></div>
-        <div class="flowrow"><span class="sw" style="background:${hhRest>=0?'var(--good)':'var(--crit)'}"></span>
+        <div class="flowrow" style="font-size:1.02rem"><span class="sw" style="background:${hhRest>=0?'var(--good)':'var(--crit)'}"></span>
           <span class="nm"><b>家計の残り</b></span>
           <span class="am ${hhRest>=0?'':'neg'}" style="${hhRest>=0?'color:var(--good)':''}">${signedYen(hhRest)}</span></div>
-        ${hhRest > 0 ? `<div class="small muted">浮いた分は月末に貯金へ回すのもおすすめ(レポート → 貯金 → 入金を記録)</div>` : ''}
+        ${hhRest > 0 ? `<div style="margin-top:4px"><button class="iconbtn" data-act="saving-in">💰 残りを貯金に回す</button></div>` : ''}
       </div>
     </div>`;
   }
@@ -767,7 +788,7 @@ function renderHome(){
     <div class="stat3" style="margin-top:8px">
       <div><div class="v pos">${yen(m.income)}</div><div class="k">収入</div></div>
       <div><div class="v neg">${yen(m.expense + m.special)}</div><div class="k">支出</div></div>
-      <div><div class="v ${m.net >= 0 ? 'pos' : 'neg'}">${signedYen(m.net)}</div><div class="k">収支</div></div>
+      <div><div class="v ${m.net >= 0 ? 'pos' : 'neg'}">${signedYen(m.net)}</div><div class="k">収支${allocSum > 0 ? '<br>(貯金・小遣い込み)' : ''}</div></div>
     </div>
   </div>
   ${flowCard}
@@ -948,7 +969,18 @@ function openEditTx(id){
     }
     save(); closeModal(); render(); toast('更新しました');
   });
-  if(type === 'income') $('#editAllocBtn').addEventListener('click', () => openAllocSheet(id));
+  if(type === 'income') $('#editAllocBtn').addEventListener('click', () => {
+    // フォームの未保存の変更(金額・日付など)を先に反映してからシートを開く
+    const f = new FormData($('#editTxForm'));
+    if(f.get('date')) t.date = f.get('date');
+    if(Number(f.get('amount')) > 0) t.amount = Number(f.get('amount'));
+    t.categoryId = f.get('categoryId'); t.memberIndex = Number(f.get('memberIndex'));
+    t.memo = String(f.get('memo')||'').trim();
+    const alloc = applySplits(t.amount, t.alloc||[]);
+    if(alloc.length) t.alloc = alloc; else delete t.alloc;
+    syncAllocSavings(t); save();
+    openAllocSheet(id);
+  });
   $('#delTxBtn').addEventListener('click', () => {
     if(!confirm('この記録を削除しますか?' + (t.alloc && t.alloc.length ? '\n(貯金への振り分けも取り消されます)' : ''))) return;
     S.transactions = S.transactions.filter(x => x.id !== id);
@@ -1054,7 +1086,7 @@ function reportMonth(){
       <div class="spread"><span>${esc(p.name)}</span><b style="font-variant-numeric:tabular-nums">${yen(p.value)}</b></div>
       <div class="bar"><i style="width:${p.value/pmax*100}%"></i></div></div>`).join('')
     : '<div class="empty">データがありません</div>'}</div>
-  <div class="card"><b>月別収支の推移(12ヶ月)</b><div style="margin-top:8px">${barChart12(curMonthKey())}</div></div>`;
+  <div class="card"><b>月別収支の推移(12ヶ月)</b><div style="margin-top:8px">${barChart12(key)}</div></div>`;
 }
 function reportYear(){
   const y = UI.repYear;
@@ -1104,11 +1136,11 @@ function savingsTrendChart(){
   let bars = '', labels = '';
   data.forEach((d,i) => {
     const x = i*gap + gap/2;
-    const h = Math.abs(d.v)/max*130;
+    const h = d.v >= 0 ? Math.abs(d.v)/max*130 : Math.min(Math.abs(d.v)/max*130, 18); // 負はviewBox内にクリップ
     bars += `<rect x="${x-bw/2}" y="${d.v>=0 ? 150-h : 150}" width="${bw}" height="${Math.max(h,0.5)}" rx="3" fill="${d.v>=0?'var(--accent)':'var(--crit)'}" opacity="${i===11?1:.55}"/>`;
     const [ ,mm] = d.k.split('-');
     labels += `<text x="${x}" y="${H-8}" text-anchor="middle" font-size="10" fill="var(--muted)">${Number(mm)}月</text>`;
-    if(i === 11 || i === 0) labels += `<text x="${x}" y="${Math.max(12, (d.v>=0?150-h:150) - 4)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink2)">${Math.round(d.v/10000)}万</text>`;
+    if(i === 11) labels += `<text x="${x}" y="${Math.max(12, (d.v>=0?150-h:150) - 4)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink2)">${Math.round(d.v/10000)}万</text>`;
   });
   return `<div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="min-width:480px;width:100%">
     <line x1="0" y1="150" x2="${W}" y2="150" stroke="var(--axis)"/>${bars}${labels}</svg></div>`;
@@ -1277,7 +1309,7 @@ function renderSettings(){
     <div class="slist">${S.buckets.map(b => `<div class="si">
       <span style="font-size:1.2rem">${b.kind==='saving'?'💰':'👛'}</span>
       <span class="grow"><span class="nm">${esc(b.name)}</span>
-        <span class="sub">${b.kind==='saving'?'貯金として残高に反映':'お小遣い・渡し切り'}</span></span>
+        <span class="sub">${b.kind==='saving'?'貯金として残高に反映':'お小遣い(渡したあとは管理しない)'}</span></span>
       <button class="iconbtn" data-act="bucket-edit" data-id="${b.id}">✏️</button>
       <button class="iconbtn" data-act="bucket-del" data-id="${b.id}">🗑</button></div>`).join('')}</div>
     <button class="btn ghost wide" data-act="bucket-add">＋ 振り分け先を追加</button>
@@ -1468,10 +1500,10 @@ function openBucketForm(id){
   const b = id ? bucketById(id) : null;
   openModal(b ? '振り分け先の編集' : '振り分け先を追加', `
   <form class="frm" id="bucketForm">
-    <label>名前<input name="name" value="${b?esc(b.name):''}" placeholder="例: 投資 / ${S.settings.members[0]||'夫'}のお小遣い" required></label>
+    <label>名前<input name="name" value="${b?esc(b.name):''}" placeholder="例: 投資 / ${esc(S.settings.members[0]||'夫')}のお小遣い" required></label>
     <label>種類<select name="kind">
       <option value="saving" ${b&&b.kind==='saving'?'selected':''}>💰 貯金(残高に反映される)</option>
-      <option value="allowance" ${b&&b.kind==='allowance'?'selected':''}>👛 お小遣い・渡し切り(残高は追わない)</option>
+      <option value="allowance" ${b&&b.kind==='allowance'?'selected':''}>👛 お小遣い(渡したあとは管理しない)</option>
     </select></label>
     <button class="btn wide" type="submit">保存</button>
   </form>`);
@@ -1494,6 +1526,8 @@ function delBucket(id){
   if(used){ alert('この振り分け先は収入の振り分けや定期取引のルールで使用中のため削除できません。先にそれらを変更してください。'); return; }
   if(!confirm('この振り分け先を削除しますか?')) return;
   S.buckets = S.buckets.filter(b => b.id !== id);
+  for(const k in S.settings.lastAlloc) // プリセットからも取り除く
+    S.settings.lastAlloc[k] = S.settings.lastAlloc[k].filter(a => a.bucketId !== id);
   save(); renderSettings(); toast('削除しました');
 }
 function openMemberForm(i){
@@ -1547,8 +1581,17 @@ $('#importFile').addEventListener('change', e => {
       const d = JSON.parse(reader.result);
       if(!d || !Array.isArray(d.transactions) || !Array.isArray(d.categories)) throw new Error('bad');
       if(!confirm(`バックアップを読み込みますか?\n(記録${d.transactions.length}件。現在のデータは上書きされます)`)) return;
+      const prevRaw = localStorage.getItem(LS_KEY);
       localStorage.setItem(LS_KEY, JSON.stringify(d));
-      S = load(); save(); // v1バックアップはここでv2に移行して永続化
+      S = load();
+      if(S.transactions.length !== d.transactions.filter(Boolean).length){
+        // 読み込みが初期データに落ちた=内容に問題あり。元のデータへ戻す
+        if(prevRaw) localStorage.setItem(LS_KEY, prevRaw);
+        S = load();
+        alert('バックアップの内容に問題があり、読み込みを中止しました。元のデータはそのまま残っています。');
+        return;
+      }
+      save(); // v1バックアップはここでv2に移行して永続化
       applyTheme();
       UI.histMonth = curMonthKey(); UI.repMonth = curMonthKey();
       render(); toast('読み込みました');
@@ -1688,6 +1731,9 @@ document.addEventListener('click', e => {
     case 'goal-del': {
       if(confirm('この目標を削除しますか?\n(積立てたお金は貯金残高に残ります)')){
         for(const st of S.savingTxs) if(st.goalId === id) delete st.goalId;
+        for(const t of S.transactions) for(const a of (t.alloc||[])) if(a.goalId === id) delete a.goalId;
+        for(const r of S.recurrings) for(const sp of (r.splits||[])) if(sp.goalId === id) delete sp.goalId;
+        for(const k in S.settings.lastAlloc) for(const a of S.settings.lastAlloc[k]) if(a.goalId === id) delete a.goalId;
         S.goals = S.goals.filter(g => g.id !== id); save(); render(); toast('削除しました');
       } break; }
     case 'cat-add': openCatForm(null, el.dataset.type); break;
@@ -1707,7 +1753,10 @@ document.addEventListener('click', e => {
       const r = S.recurrings.find(x => x.id === id);
       if(r){
         r.active = !r.active;
-        if(r.active){ r.lastApplied = todayStr().slice(0,7); r.createdDate = todayStr(); } // resume from now
+        if(r.active){ // 再開: 当月の未来分から記帳できるよう前月起点にする(過去分はcreatedDateで抑止)
+          r.lastApplied = shiftMonth(todayStr().slice(0,7), -1);
+          r.createdDate = todayStr();
+        }
         save(); renderSettings();
         toast(r.active ? '再開しました(今後の分から記帳されます)' : '停止しました');
       } break; }
@@ -1737,9 +1786,14 @@ applyTheme();
 }
 document.addEventListener('visibilitychange', () => {
   if(document.visibilityState === 'visible'){
+    S = load(); // 他のタブでの変更を取り込んでから定期取引を判定(二重記帳防止)
     const applied = checkRecurrings();
-    if(applied.length){ toast('🔁 自動記帳: ' + applied.join(' / ')); render(); }
+    if(applied.length) toast('🔁 自動記帳: ' + applied.join(' / '));
+    render();
   }
+});
+window.addEventListener('storage', e => { // 別タブの保存を反映
+  if(e.key === LS_KEY && e.newValue){ S = load(); applyTheme(); render(); }
 });
 switchTab('input');
 </script>
