@@ -217,6 +217,12 @@ table.x thead th{background:var(--surface2);position:sticky;top:0}
 #toast.show{display:flex}
 #toast button{color:var(--warn);font-weight:700;white-space:nowrap}
 .empty{color:var(--muted);text-align:center;padding:18px 0;font-size:.85rem}
+.flowbar{display:flex;height:14px;border-radius:99px;overflow:hidden;margin:8px 0 4px;background:var(--surface2)}
+.flowbar i{display:block;height:100%}
+.flowrow{display:flex;align-items:center;gap:8px;font-size:.85rem;padding:3px 0}
+.flowrow .sw{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+.flowrow .nm{flex:1;min-width:0}
+.flowrow .am{font-variant-numeric:tabular-nums;font-weight:600}
 .wkgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:center}
 .wkgrid .v{font-weight:700;font-variant-numeric:tabular-nums}
 .wkgrid .k{font-size:.72rem;color:var(--muted)}
@@ -260,15 +266,24 @@ function defaultCategories(){
   return ex.map(([name,icon]) => ({id:uid(), name, icon, type:'expense', budget:0, order:o++}))
     .concat(inc.map(([name,icon]) => ({id:uid(), name, icon, type:'income', budget:0, order:o++})));
 }
+function defaultBuckets(members){
+  const b = [{id:uid(), name:'貯金', kind:'saving'}];
+  for(const m of (members||[]).filter(m => m !== '共同'))
+    b.push({id:uid(), name:m + 'のお小遣い', kind:'allowance'});
+  return b;
+}
 function defaultData(){
+  const members = ['夫','妻','共同'];
   return {
-    v:1,
-    settings:{ members:['夫','妻','共同'], theme:'auto', startDay:1, lastMember:0 },
+    v:2,
+    settings:{ members, theme:'auto', startDay:1, lastMember:0, savingsInitial:0, lastAlloc:{} },
     categories: defaultCategories(),
     transactions: [],
     recurrings: [],
     quickEntries: [],
-    goals: []
+    goals: [],
+    buckets: defaultBuckets(members),
+    savingTxs: []
   };
 }
 function load(){
@@ -278,9 +293,17 @@ function load(){
     const d = JSON.parse(raw);
     const base = defaultData();
     d.settings = Object.assign(base.settings, d.settings||{});
-    for(const k of ['categories','transactions','recurrings','quickEntries','goals'])
+    for(const k of ['categories','transactions','recurrings','quickEntries','goals','savingTxs'])
       if(!Array.isArray(d[k])) d[k] = (k==='categories') ? base.categories : [];
-    d.v = 1;
+    if(!Array.isArray(d.buckets) || !d.buckets.length) d.buckets = defaultBuckets(d.settings.members);
+    if((d.v||1) < 2){ // v1 -> v2: 貯金目標の積立を貯金台帳(savingTxs)へ移行
+      for(const g of d.goals){
+        for(const dep of (g.deposits||[]))
+          d.savingTxs.push({id:dep.id||uid(), date:dep.date, amount:dep.amount, memo:dep.memo||'', goalId:g.id});
+        delete g.deposits;
+      }
+    }
+    d.v = 2;
     return d;
   }catch(e){ return defaultData(); }
 }
@@ -360,6 +383,46 @@ function pctBadge(cur, prev){
     : '<span class="badge good">先月比' + p + '%</span>';
 }
 
+/* ---- savings & allocation ---- */
+function bucketById(id){ return S.buckets.find(b => b.id === id); }
+function savingBucketIds(){ return new Set(S.buckets.filter(b => b.kind === 'saving').map(b => b.id)); }
+function savingsBalance(untilDate){
+  let s = S.settings.savingsInitial || 0;
+  for(const t of S.savingTxs) if(!untilDate || t.date <= untilDate) s += t.amount;
+  return s;
+}
+function goalById(id){ return S.goals.find(g => g.id === id); }
+function goalSaved(g){ return S.savingTxs.filter(t => t.goalId === g.id).reduce((s,t) => s + t.amount, 0); }
+function allocTotal(tx){ return (tx.alloc||[]).reduce((s,a) => s + a.amount, 0); }
+function monthAlloc(key){ // {per: {bucketId: amount}, total}
+  const per = {}; let total = 0;
+  for(const t of txInMonth(key)) if(txType(t) === 'income')
+    for(const a of (t.alloc||[])){ per[a.bucketId] = (per[a.bucketId]||0) + a.amount; total += a.amount; }
+  return {per, total};
+}
+function syncAllocSavings(tx){ // 収入txの振り分け → 貯金台帳を作り直す(冪等)
+  S.savingTxs = S.savingTxs.filter(st => st.txId !== tx.id);
+  const sav = savingBucketIds();
+  for(const a of (tx.alloc||[])) if(sav.has(a.bucketId) && a.amount > 0)
+    S.savingTxs.push({id:uid(), date:tx.date, amount:a.amount,
+      memo:(bucketById(a.bucketId)?.name || '貯金') + 'へ振り分け', txId:tx.id, goalId:a.goalId || undefined});
+}
+function applySplits(amount, splits){ // ルールを収入額に収まるようにclampしてallocへ
+  let remain = amount; const alloc = [];
+  for(const sp of (splits||[])){
+    const amt = Math.min(sp.amount, remain);
+    if(amt > 0){ alloc.push({bucketId:sp.bucketId, amount:amt, goalId:sp.goalId || undefined}); remain -= amt; }
+  }
+  return alloc;
+}
+function allocSummary(tx){ // 「貯金5万/夫のお小遣い2万/家計21万」の文字列
+  if(!tx.alloc || !tx.alloc.length) return '';
+  const parts = tx.alloc.map(a => (bucketById(a.bucketId)?.name || '?') + yen(a.amount));
+  const rest = tx.amount - allocTotal(tx);
+  if(rest > 0) parts.push('家計' + yen(rest));
+  return parts.join(' / ');
+}
+
 /* ================= recurring engine ================= */
 function occurrenceDate(y, m, day){ // m: 1-12
   const dim = new Date(y, m, 0).getDate();
@@ -377,8 +440,14 @@ function checkRecurrings(){
       const od = occurrenceDate(y, m, r.dayOfMonth);
       if(od > tstr) break;
       if(!r.createdDate || od >= r.createdDate){
-        S.transactions.push({ id:uid(), date:od, amount:r.amount, categoryId:r.categoryId,
-          memberIndex:r.memberIndex, memo:r.name, special:false, recurringId:r.id });
+        const tx = { id:uid(), date:od, amount:r.amount, categoryId:r.categoryId,
+          memberIndex:r.memberIndex, memo:r.name, special:false, recurringId:r.id };
+        if(r.splits && r.splits.length && catById(r.categoryId)?.type === 'income'){
+          const alloc = applySplits(r.amount, r.splits);
+          if(alloc.length){ tx.alloc = alloc; }
+        }
+        S.transactions.push(tx);
+        if(tx.alloc) syncAllocSavings(tx);
         applied.push(r.name + ' ' + yen(r.amount) + ' (' + mdLabel(od) + ')');
       }
       r.lastApplied = y + '-' + pad(m);
@@ -391,6 +460,7 @@ function checkRecurrings(){
 
 /* ================= UI state ================= */
 let S = load();
+save(); // 旧バージョンのデータはここで移行済みの形に揃える
 const UI = {
   tab:'input',
   mode:'expense', expr:'', date:todayStr(), member:0, special:false, memo:'',
@@ -516,8 +586,74 @@ function saveTx(catId){
     const remain = cat.budget - spentFor(catId, monthKeyOf(tx.date));
     msg += remain >= 0 ? ` / ${cat.name}あと${yen(remain)}` : ` / ${cat.name}予算${yen(-remain)}超過!`;
   }
+  if(cat && cat.type === 'income'){
+    renderInput();
+    toast(msg);
+    if(S.buckets.length) openAllocSheet(tx.id);
+    return;
+  }
   toast(msg, '☆定番に登録', () => quickFromTx(tx.id));
   renderInput();
+}
+/* ---- 振り分けシート ---- */
+function openAllocSheet(txId){
+  const t = S.transactions.find(x => x.id === txId);
+  if(!t || txType(t) !== 'income') return;
+  // プリセット: 既存の振り分け > 前回値(lastAlloc)
+  const cur = {};
+  let preset = (t.alloc && t.alloc.length) ? t.alloc : ((S.settings.lastAlloc||{})[t.categoryId] || []);
+  for(const a of applySplits(t.amount, preset)) cur[a.bucketId] = a;
+  const goalOpts = sel => '<option value="">目標を選ばない</option>' +
+    S.goals.map(g => `<option value="${g.id}" ${sel===g.id?'selected':''}>🎯 ${esc(g.name)}</option>`).join('');
+  openModal('収入の振り分け', `
+  <div class="small muted" style="margin-bottom:8px">${mdLabel(t.date)} ${esc(catById(t.categoryId)?.name||'')} <b style="color:var(--income)">${yen(t.amount)}</b> をどこに回しますか?残りは自動で家計(生活費)になります。</div>
+  <form class="frm" id="allocForm">
+    ${S.buckets.map(b => `
+      <div class="hrow" style="align-items:flex-end">
+        <label style="flex:1.2">${b.kind==='saving' ? '💰' : '👛'} ${esc(b.name)}
+          <input type="number" min="0" inputmode="numeric" placeholder="0" data-alloc="${b.id}" value="${cur[b.id]?cur[b.id].amount:''}"></label>
+        ${b.kind==='saving' && S.goals.length ? `<label style="flex:1">貯金の使い道(任意)
+          <select data-goal="${b.id}">${goalOpts(cur[b.id]?.goalId)}</select></label>` : ''}
+      </div>`).join('')}
+    <div class="spread" style="background:var(--surface2);border-radius:10px;padding:8px 12px">
+      <span>🏠 残り → 家計(生活費)</span><b id="allocRest" style="font-variant-numeric:tabular-nums"></b>
+    </div>
+    <button class="btn wide" type="submit">この内容で振り分ける</button>
+    <button class="btn wide ghost" type="button" id="allocNone">振り分けない(全額家計へ)</button>
+  </form>`);
+  const upd = () => {
+    let s = 0;
+    $$('#allocForm [data-alloc]').forEach(i => s += Number(i.value)||0);
+    const rest = t.amount - s;
+    const el = $('#allocRest');
+    el.textContent = yen(rest);
+    el.style.color = rest < 0 ? 'var(--crit)' : '';
+    return rest;
+  };
+  upd();
+  $$('#allocForm [data-alloc]').forEach(i => i.addEventListener('input', upd));
+  $('#allocForm').addEventListener('submit', e => {
+    e.preventDefault();
+    if(upd() < 0){ alert('振り分けの合計が収入額を超えています'); return; }
+    const alloc = [];
+    $$('#allocForm [data-alloc]').forEach(i => {
+      const amount = Number(i.value)||0;
+      if(amount > 0){
+        const bId = i.dataset.alloc;
+        const gSel = $(`#allocForm [data-goal="${bId}"]`);
+        alloc.push({bucketId:bId, amount, goalId: gSel && gSel.value ? gSel.value : undefined});
+      }
+    });
+    if(alloc.length){ t.alloc = alloc; S.settings.lastAlloc[t.categoryId] = alloc; }
+    else delete t.alloc;
+    syncAllocSavings(t);
+    save(); closeModal(); render();
+    toast(alloc.length ? '振り分けました: ' + allocSummary(t) : '全額を家計にしました');
+  });
+  $('#allocNone').addEventListener('click', () => {
+    delete t.alloc; syncAllocSavings(t);
+    save(); closeModal(); render(); toast('全額を家計にしました');
+  });
 }
 function quickFromTx(txId){
   const t = S.transactions.find(x => x.id === txId);
@@ -588,7 +724,7 @@ function renderHome(){
 
   const recent = S.transactions.slice().sort((a,b) => b.date === a.date ? (b.id > a.id ? 1 : -1) : (b.date > a.date ? 1 : -1)).slice(0,10);
   const goalsHtml = S.goals.map(g => {
-    const saved = g.deposits.reduce((s,d) => s + d.amount, 0);
+    const saved = goalSaved(g);
     const r = g.targetAmount > 0 ? saved / g.targetAmount : 0;
     return `<div class="budgetrow"><div class="spread"><span>🎯 ${esc(g.name)}</span>
       <span class="small" style="font-variant-numeric:tabular-nums"><b>${yen(saved)}</b><span class="muted"> / ${yen(g.targetAmount)} (${Math.round(r*100)}%)</span></span></div>
@@ -596,6 +732,34 @@ function renderHome(){
   }).join('');
 
   const wr = budget > 0 ? m.expense / budget : 0;
+
+  // 今月のお金の流れ(振り分けがある月のみ)
+  const {per: allocPer, total: allocSum} = monthAlloc(key);
+  let flowCard = '';
+  if(allocSum > 0 && m.income > 0){
+    const hh = m.income - allocSum;             // 家計に入れた額
+    const totalExp = m.expense + m.special;     // 実際の支出
+    const hhRest = hh - totalExp;               // 家計の残り
+    const bColor = b => b.kind === 'saving' ? 'var(--accent)' : 'var(--special)';
+    const segs = S.buckets.filter(b => allocPer[b.id] > 0)
+      .map(b => ({name:b.name, icon:b.kind==='saving'?'💰':'👛', v:allocPer[b.id], c:bColor(b)}));
+    segs.push({name:'家計(生活費)へ', icon:'🏠', v:hh, c:'var(--income)'});
+    flowCard = `<div class="card">
+      <div class="spread"><b>今月のお金の流れ</b><span class="small muted">収入 ${yen(m.income)}</span></div>
+      <div class="flowbar">${segs.map(s => `<i style="width:${Math.max(1, s.v/m.income*100)}%;background:${s.c}"></i>`).join('')}</div>
+      ${segs.map(s => `<div class="flowrow"><span class="sw" style="background:${s.c}"></span>
+        <span class="nm">${s.icon} ${esc(s.name)}</span><span class="am">${yen(s.v)}</span></div>`).join('')}
+      <div style="border-top:1px dashed var(--line);margin-top:6px;padding-top:6px">
+        <div class="flowrow"><span class="sw" style="background:var(--expense)"></span>
+          <span class="nm">🛒 家計からの支出</span><span class="am">${yen(totalExp)}</span></div>
+        <div class="flowrow"><span class="sw" style="background:${hhRest>=0?'var(--good)':'var(--crit)'}"></span>
+          <span class="nm"><b>家計の残り</b></span>
+          <span class="am ${hhRest>=0?'':'neg'}" style="${hhRest>=0?'color:var(--good)':''}">${signedYen(hhRest)}</span></div>
+        ${hhRest > 0 ? `<div class="small muted">浮いた分は月末に貯金へ回すのもおすすめ(レポート → 貯金 → 入金を記録)</div>` : ''}
+      </div>
+    </div>`;
+  }
+
   $('#tab-home').innerHTML = `
   <div class="card" style="margin-top:8px">
     <div class="spread"><b>${monthLabel(key)}</b>
@@ -606,6 +770,7 @@ function renderHome(){
       <div><div class="v ${m.net >= 0 ? 'pos' : 'neg'}">${signedYen(m.net)}</div><div class="k">収支</div></div>
     </div>
   </div>
+  ${flowCard}
   ${budget > 0 ? `<div class="card">
     <div class="spread"><b>全体予算</b><span style="font-variant-numeric:tabular-nums">${yen(m.expense)}<span class="muted small"> / ${yen(budget)}</span></span></div>
     <div class="bar"><i class="${wr>1?'crit':wr>=.8?'warn':''}" style="width:${Math.min(100, wr*100)}%"></i></div>
@@ -644,6 +809,7 @@ function txRow(t){
       <span class="t1">${c ? esc(c.name) : '?'}
         ${t.special ? '<span class="badge special">特別</span>' : ''}
         ${t.recurringId ? '<span title="定期">🔁</span>' : ''}
+        ${t.alloc && t.alloc.length ? '<span title="振り分け済み">💰</span>' : ''}
         ${t.memo ? `<span class="memo">${esc(t.memo)}</span>` : ''}</span>
       <span class="t2">${mdLabel(t.date)} ・ ${esc(memberName(t.memberIndex))}</span>
     </span>
@@ -762,6 +928,9 @@ function openEditTx(id){
         <option value="">いいえ</option><option value="1" ${t.special?'selected':''}>✨はい(予算と別枠)</option></select></label>` : ''}
     </div>
     <label>メモ<input name="memo" value="${esc(t.memo||'')}"></label>
+    ${type === 'income' ? `<div class="small" style="background:var(--surface2);border-radius:10px;padding:8px 12px">
+      振り分け: ${t.alloc && t.alloc.length ? esc(allocSummary(t)) : 'なし(全額家計)'}
+      <button class="iconbtn" type="button" id="editAllocBtn" style="margin-left:6px">✏️ 変更</button></div>` : ''}
     <button class="btn wide" type="submit">保存</button>
     <button class="btn wide danger" type="button" id="delTxBtn">この記録を削除</button>
   </form>`);
@@ -772,11 +941,18 @@ function openEditTx(id){
     t.categoryId = f.get('categoryId'); t.memberIndex = Number(f.get('memberIndex'));
     t.special = type === 'expense' && !!f.get('special');
     t.memo = String(f.get('memo')||'').trim();
+    if(type === 'income'){ // 金額変更で振り分けが超過しないようにclampし、台帳を同期
+      const alloc = applySplits(t.amount, t.alloc||[]);
+      if(alloc.length) t.alloc = alloc; else delete t.alloc;
+      syncAllocSavings(t);
+    }
     save(); closeModal(); render(); toast('更新しました');
   });
+  if(type === 'income') $('#editAllocBtn').addEventListener('click', () => openAllocSheet(id));
   $('#delTxBtn').addEventListener('click', () => {
-    if(!confirm('この記録を削除しますか?')) return;
+    if(!confirm('この記録を削除しますか?' + (t.alloc && t.alloc.length ? '\n(貯金への振り分けも取り消されます)' : ''))) return;
     S.transactions = S.transactions.filter(x => x.id !== id);
+    S.savingTxs = S.savingTxs.filter(st => st.txId !== id);
     save(); closeModal(); render(); toast('削除しました');
   });
 }
@@ -914,33 +1090,84 @@ function reportYear(){
   <div class="card"><b>✨特別費の一覧(${y}年)</b>
     <div style="margin-top:4px">${specials.length ? specials.map(txRow).join('') : '<div class="empty">特別費の記録はありません</div>'}</div></div>`;
 }
+function savingsTrendChart(){
+  const endKey = curMonthKey();
+  const keys = [];
+  for(let i = 11; i >= 0; i--) keys.push(shiftMonth(endKey, -i));
+  const data = keys.map(k => {
+    const [ , end] = monthRange(k);
+    const last = fmtDate(new Date(end.getTime() - 86400000));
+    return {k, v: savingsBalance(last)};
+  });
+  const max = Math.max(1, ...data.map(d => Math.abs(d.v)));
+  const W = 600, H = 175, bw = 30, gap = W/12;
+  let bars = '', labels = '';
+  data.forEach((d,i) => {
+    const x = i*gap + gap/2;
+    const h = Math.abs(d.v)/max*130;
+    bars += `<rect x="${x-bw/2}" y="${d.v>=0 ? 150-h : 150}" width="${bw}" height="${Math.max(h,0.5)}" rx="3" fill="${d.v>=0?'var(--accent)':'var(--crit)'}" opacity="${i===11?1:.55}"/>`;
+    const [ ,mm] = d.k.split('-');
+    labels += `<text x="${x}" y="${H-8}" text-anchor="middle" font-size="10" fill="var(--muted)">${Number(mm)}月</text>`;
+    if(i === 11 || i === 0) labels += `<text x="${x}" y="${Math.max(12, (d.v>=0?150-h:150) - 4)}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--ink2)">${Math.round(d.v/10000)}万</text>`;
+  });
+  return `<div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="min-width:480px;width:100%">
+    <line x1="0" y1="150" x2="${W}" y2="150" stroke="var(--axis)"/>${bars}${labels}</svg></div>`;
+}
 function reportGoals(){
   const net = sums(curMonthKey()).net;
+  const balance = savingsBalance();
+  const key = curMonthKey();
+  const [ms, me] = monthRange(key).map(fmtDate);
+  const monthIn = S.savingTxs.filter(t => t.date >= ms && t.date < me).reduce((s,t) => s + t.amount, 0);
+  const ledger = S.savingTxs.slice().sort((a,b) => a.date === b.date ? (b.id > a.id ? 1 : -1) : (a.date < b.date ? 1 : -1)).slice(0,12);
   const cards = S.goals.map(g => {
-    const saved = g.deposits.reduce((s,d) => s + d.amount, 0);
+    const saved = goalSaved(g);
     const r = g.targetAmount > 0 ? saved / g.targetAmount : 0;
-    const deps = g.deposits.slice().sort((a,b) => a.date < b.date ? 1 : -1).slice(0,5);
+    const deps = S.savingTxs.filter(t => t.goalId === g.id).sort((a,b) => a.date < b.date ? 1 : -1).slice(0,5);
     return `<div class="card">
       <div class="spread"><b>🎯 ${esc(g.name)}</b>
         <span class="row"><button class="iconbtn" data-act="goal-edit" data-id="${g.id}">✏️</button>
         <button class="iconbtn" data-act="goal-del" data-id="${g.id}">🗑</button></span></div>
       <div class="spread" style="margin-top:6px"><span style="font-variant-numeric:tabular-nums"><b>${yen(saved)}</b><span class="muted small"> / ${yen(g.targetAmount)}</span></span>
         <span class="badge ${r>=1?'good':'info'}">${Math.round(r*100)}%${r>=1?' 達成🎉':''}</span></div>
-      <div class="bar"><i style="width:${Math.min(100, r*100)}%"></i></div>
+      <div class="bar"><i style="width:${Math.min(100, Math.max(0, r*100))}%"></i></div>
       ${r < 1 ? `<div class="small muted">あと${yen(g.targetAmount - saved)}</div>` : ''}
-      <button class="btn wide" data-act="goal-deposit" data-id="${g.id}">＋ 積立を記録</button>
+      <button class="btn wide" data-act="goal-deposit" data-id="${g.id}">＋ この目標に積立</button>
       ${deps.length ? `<div class="small muted" style="margin-top:8px">最近の積立</div>` +
         deps.map(d => `<div class="spread small" style="padding:3px 0;border-bottom:1px solid var(--line)">
           <span>${mdLabel(d.date)} ${d.memo ? '・' + esc(d.memo) : ''}</span>
-          <span class="row"><b>${yen(d.amount)}</b><button class="iconbtn" data-act="dep-del" data-id="${g.id}" data-dep="${d.id}">✕</button></span></div>`).join('') : ''}
+          <span class="row"><b>${yen(d.amount)}</b>${d.txId ? '<span title="給料の振り分けから">🔗</span>' :
+            `<button class="iconbtn" data-act="saving-del" data-id="${d.id}">✕</button>`}</span></div>`).join('') : ''}
     </div>`;
   }).join('');
   return `
-  <div class="card" style="margin-top:10px">
+  <div class="card" style="margin-top:10px;text-align:center">
+    <div class="small muted">総貯金残高</div>
+    <div style="font-size:1.9rem;font-weight:700;font-variant-numeric:tabular-nums;color:var(--accent)">${yen(balance)}</div>
+    <div class="small ${monthIn>=0?'muted':'neg'}">今月 ${signedYen(monthIn)}</div>
+    <div class="row" style="justify-content:center;margin-top:10px">
+      <button class="btn" data-act="saving-in">＋ 入金を記録</button>
+      <button class="btn ghost" data-act="saving-out">− 出金を記録</button>
+    </div>
+    <div class="small muted" style="margin-top:8px">給料の振り分けで「貯金」に回した分は自動で反映されます。現在の残高は 設定 → 貯金の初期残高 から合わせられます。</div>
+  </div>
+  <div class="card"><b>残高の推移(12ヶ月・月末時点)</b><div style="margin-top:8px">${savingsTrendChart()}</div></div>
+  <div class="card">
     <div class="spread"><b>貯金目標</b><button class="btn" data-act="goal-add">＋ 目標を追加</button></div>
     <div class="small muted" style="margin-top:6px">今月の収支は <b class="${net>=0?'pos':'neg'}">${signedYen(net)}</b>。黒字分を積立の目安にどうぞ</div>
   </div>
-  ${cards || '<div class="card"><div class="empty">目標がまだありません。「旅行資金」「新しい家電」など、貯めたい金額を登録しましょう!</div></div>'}`;
+  ${cards || '<div class="card"><div class="empty">目標がまだありません。「旅行資金」「新しい家電」など、貯めたい金額を登録しましょう!</div></div>'}
+  <div class="card"><b>入出金の履歴</b>
+    <div style="margin-top:4px">${ledger.length ? ledger.map(d => {
+      const g = d.goalId ? goalById(d.goalId) : null;
+      return `<div class="spread small" style="padding:5px 0;border-bottom:1px solid var(--line)">
+      <span>${mdLabel(d.date)} ${esc(d.memo||'')}${g ? ' <span class="badge info">🎯' + esc(g.name) + '</span>' : ''}</span>
+      <span class="row"><b class="${d.amount>=0?'':'neg'}" style="${d.amount>=0?'color:var(--accent)':''}">${signedYen(d.amount)}</b>
+        ${d.txId ? '<span title="給料の振り分けから(収入の記録から編集できます)">🔗</span>' :
+          `<button class="iconbtn" data-act="saving-del" data-id="${d.id}">✕</button>`}</span></div>`; }).join('')
+    : '<div class="empty">まだ入出金がありません</div>'}</div>
+    <div class="small muted" style="margin-top:6px">🔗が付いた行は給料の振り分け由来です(元の収入の記録から変更できます)</div>
+  </div>`;
 }
 function openGoalForm(id){
   const g = id ? S.goals.find(x => x.id === id) : null;
@@ -954,27 +1181,32 @@ function openGoalForm(id){
     e.preventDefault();
     const f = new FormData(e.target);
     if(g){ g.name = f.get('name').trim(); g.targetAmount = Number(f.get('target')); }
-    else S.goals.push({id:uid(), name:f.get('name').trim(), targetAmount:Number(f.get('target')), deposits:[]});
+    else S.goals.push({id:uid(), name:f.get('name').trim(), targetAmount:Number(f.get('target'))});
     save(); closeModal(); render(); toast('保存しました');
   });
 }
-function openDepositForm(goalId){
-  const g = S.goals.find(x => x.id === goalId);
-  if(!g) return;
-  openModal(g.name + ' に積立', `
-  <form class="frm" id="depForm">
+function openSavingForm(kind, goalId){ // kind: 'in' | 'out'
+  const g = goalId ? goalById(goalId) : null;
+  const isIn = kind === 'in';
+  openModal(g ? g.name + ' に積立' : (isIn ? '貯金に入金' : '貯金から出金'), `
+  <form class="frm" id="savForm">
     <div class="hrow">
       <label>日付<input type="date" name="date" value="${todayStr()}" required></label>
       <label>金額<input type="number" name="amount" min="1" inputmode="numeric" required autofocus></label>
     </div>
-    <label>メモ(任意)<input name="memo" placeholder="例: 7月分"></label>
-    <button class="btn wide" type="submit">積立を記録</button>
+    ${!g && isIn && S.goals.length ? `<label>使い道(任意)<select name="goalId"><option value="">目標を選ばない</option>
+      ${S.goals.map(x => `<option value="${x.id}">🎯 ${esc(x.name)}</option>`).join('')}</select></label>` : ''}
+    <label>メモ(任意)<input name="memo" placeholder="${isIn ? '例: 今月の余り' : '例: 旅行代の支払い'}"></label>
+    <button class="btn wide" type="submit">${isIn ? '入金を記録' : '出金を記録'}</button>
   </form>`);
-  $('#depForm').addEventListener('submit', e => {
+  $('#savForm').addEventListener('submit', e => {
     e.preventDefault();
     const f = new FormData(e.target);
-    g.deposits.push({id:uid(), date:f.get('date'), amount:Number(f.get('amount')), memo:String(f.get('memo')||'').trim()});
-    save(); closeModal(); render(); toast('積立を記録しました');
+    const amount = Number(f.get('amount')) * (isIn ? 1 : -1);
+    S.savingTxs.push({id:uid(), date:f.get('date'), amount,
+      memo:String(f.get('memo')||'').trim(), goalId: g ? g.id : (f.get('goalId') || undefined)});
+    save(); closeModal(); render();
+    toast(isIn ? '入金を記録しました' : '出金を記録しました');
   });
 }
 
@@ -1025,13 +1257,30 @@ function renderSettings(){
   </div>
   <h2>貯金目標</h2>
   <div class="card">
-    <div class="slist">${S.goals.length ? S.goals.map(g => { const saved = g.deposits.reduce((s,d)=>s+d.amount,0);
+    <div class="slist">${S.goals.length ? S.goals.map(g => { const saved = goalSaved(g);
       return `<div class="si"><span style="font-size:1.2rem">🎯</span>
       <span class="grow"><span class="nm">${esc(g.name)}</span><span class="sub">${yen(saved)} / ${yen(g.targetAmount)}</span></span>
       <button class="iconbtn" data-act="goal-edit" data-id="${g.id}">✏️</button>
       <button class="iconbtn" data-act="goal-del" data-id="${g.id}">🗑</button></div>`; }).join('')
     : '<div class="empty">積立の記録は「レポート → 貯金」からできます</div>'}</div>
     <button class="btn ghost wide" data-act="goal-add">＋ 目標を追加</button>
+  </div>
+  <h2>貯金・振り分け先</h2>
+  <div class="card">
+    <div class="frm" style="margin-bottom:10px">
+      <label>貯金の初期残高(いま銀行にある貯金の総額)
+        <input type="number" id="setSavInit" inputmode="numeric" value="${S.settings.savingsInitial||0}">
+      </label>
+      <div class="small muted">現在の残高: <b>${yen(savingsBalance())}</b>(初期残高+入出金)</div>
+    </div>
+    <div class="small muted" style="margin-bottom:4px">収入を記録したときの振り分け先です。「投資」「学資」なども追加できます。</div>
+    <div class="slist">${S.buckets.map(b => `<div class="si">
+      <span style="font-size:1.2rem">${b.kind==='saving'?'💰':'👛'}</span>
+      <span class="grow"><span class="nm">${esc(b.name)}</span>
+        <span class="sub">${b.kind==='saving'?'貯金として残高に反映':'お小遣い・渡し切り'}</span></span>
+      <button class="iconbtn" data-act="bucket-edit" data-id="${b.id}">✏️</button>
+      <button class="iconbtn" data-act="bucket-del" data-id="${b.id}">🗑</button></div>`).join('')}</div>
+    <button class="btn ghost wide" data-act="bucket-add">＋ 振り分け先を追加</button>
   </div>
   <h2>メンバー(支払者タグ)</h2>
   <div class="card">
@@ -1068,6 +1317,10 @@ function renderSettings(){
   <div class="small muted" style="text-align:center;margin:10px 0">
     📱 スマホの「ホーム画面に追加」をすると、アプリのように全画面で使えます
   </div>`;
+  $('#setSavInit').addEventListener('change', e => {
+    S.settings.savingsInitial = Number(e.target.value)||0; save(); renderSettings();
+    toast('初期残高を設定しました(現在の残高: ' + yen(savingsBalance()) + ')');
+  });
   $('#setStartDay').addEventListener('change', e => {
     S.settings.startDay = Number(e.target.value); save();
     UI.histMonth = curMonthKey(); UI.repMonth = curMonthKey();
@@ -1155,20 +1408,54 @@ function openRecForm(id){
     <label>支払者<select name="memberIndex">
       ${S.settings.members.map((m,i) => `<option value="${i}" ${r&&r.memberIndex===i?'selected':''}>${esc(m)}</option>`).join('')}
     </select></label>
+    <div id="recSplits" style="display:none">
+      <div class="small" style="margin-bottom:6px"><b>振り分けルール</b>(任意) — 記帳時に自動で振り分けます。残りは家計に。</div>
+      <div class="frm">
+      ${S.buckets.map(b => { const sp = r && r.splits ? r.splits.find(x => x.bucketId === b.id) : null;
+        return `<div class="hrow" style="align-items:flex-end">
+        <label style="flex:1.2">${b.kind==='saving' ? '💰' : '👛'} ${esc(b.name)}
+          <input type="number" min="0" inputmode="numeric" placeholder="0" data-split="${b.id}" value="${sp?sp.amount:''}"></label>
+        ${b.kind==='saving' && S.goals.length ? `<label style="flex:1">使い道(任意)
+          <select data-splitgoal="${b.id}"><option value="">目標を選ばない</option>
+          ${S.goals.map(g => `<option value="${g.id}" ${sp&&sp.goalId===g.id?'selected':''}>🎯 ${esc(g.name)}</option>`).join('')}</select></label>` : ''}
+        </div>`; }).join('')}
+      </div>
+    </div>
     <div class="small muted">今日以降の該当日に自動で記帳されます(アプリを開いたとき)。過去の分をさかのぼって計上したい場合は、履歴から手動で追加してください。</div>
     <button class="btn wide" type="submit">保存</button>
   </form>`);
+  const updSplitVis = () => {
+    const c = catById($('#recForm [name="categoryId"]').value);
+    $('#recSplits').style.display = c && c.type === 'income' ? '' : 'none';
+  };
+  updSplitVis();
+  $('#recForm [name="categoryId"]').addEventListener('change', updSplitVis);
   $('#recForm').addEventListener('submit', e => {
     e.preventDefault();
     const f = new FormData(e.target);
+    const splits = [];
+    if(catById(f.get('categoryId'))?.type === 'income'){
+      $$('#recForm [data-split]').forEach(i => {
+        const amount = Number(i.value)||0;
+        if(amount > 0){
+          const bId = i.dataset.split;
+          const gSel = $(`#recForm [data-splitgoal="${bId}"]`);
+          splits.push({bucketId:bId, amount, goalId: gSel && gSel.value ? gSel.value : undefined});
+        }
+      });
+      if(splits.reduce((s,x) => s + x.amount, 0) > Number(f.get('amount'))){
+        alert('振り分けの合計が金額を超えています'); return;
+      }
+    }
     if(r){
       r.name = f.get('name').trim(); r.amount = Number(f.get('amount'));
       r.dayOfMonth = Number(f.get('day')); r.categoryId = f.get('categoryId');
       r.memberIndex = Number(f.get('memberIndex'));
+      r.splits = splits;
     } else {
       S.recurrings.push({id:uid(), name:f.get('name').trim(), amount:Number(f.get('amount')),
         dayOfMonth:Number(f.get('day')), categoryId:f.get('categoryId'),
-        memberIndex:Number(f.get('memberIndex')), active:true,
+        memberIndex:Number(f.get('memberIndex')), active:true, splits,
         createdDate:todayStr(), createdMonth:todayStr().slice(0,7), lastApplied:null});
     }
     save();
@@ -1176,6 +1463,38 @@ function openRecForm(id){
     closeModal(); render();
     toast(applied.length ? '🔁 ' + applied.join(' / ') + ' を自動計上しました' : '保存しました');
   });
+}
+function openBucketForm(id){
+  const b = id ? bucketById(id) : null;
+  openModal(b ? '振り分け先の編集' : '振り分け先を追加', `
+  <form class="frm" id="bucketForm">
+    <label>名前<input name="name" value="${b?esc(b.name):''}" placeholder="例: 投資 / ${S.settings.members[0]||'夫'}のお小遣い" required></label>
+    <label>種類<select name="kind">
+      <option value="saving" ${b&&b.kind==='saving'?'selected':''}>💰 貯金(残高に反映される)</option>
+      <option value="allowance" ${b&&b.kind==='allowance'?'selected':''}>👛 お小遣い・渡し切り(残高は追わない)</option>
+    </select></label>
+    <button class="btn wide" type="submit">保存</button>
+  </form>`);
+  $('#bucketForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    if(b){
+      const wasSaving = b.kind === 'saving';
+      b.name = f.get('name').trim(); b.kind = f.get('kind');
+      if(wasSaving !== (b.kind === 'saving')) // 種類が変わったら振り分け由来の台帳を作り直す
+        for(const t of S.transactions) if(t.alloc && t.alloc.some(a => a.bucketId === b.id)) syncAllocSavings(t);
+    }
+    else S.buckets.push({id:uid(), name:f.get('name').trim(), kind:f.get('kind')});
+    save(); closeModal(); renderSettings(); toast('保存しました');
+  });
+}
+function delBucket(id){
+  const used = S.transactions.some(t => (t.alloc||[]).some(a => a.bucketId === id)) ||
+    S.recurrings.some(r => (r.splits||[]).some(sp => sp.bucketId === id));
+  if(used){ alert('この振り分け先は収入の振り分けや定期取引のルールで使用中のため削除できません。先にそれらを変更してください。'); return; }
+  if(!confirm('この振り分け先を削除しますか?')) return;
+  S.buckets = S.buckets.filter(b => b.id !== id);
+  save(); renderSettings(); toast('削除しました');
 }
 function openMemberForm(i){
   const isNew = i == null;
@@ -1229,7 +1548,8 @@ $('#importFile').addEventListener('change', e => {
       if(!d || !Array.isArray(d.transactions) || !Array.isArray(d.categories)) throw new Error('bad');
       if(!confirm(`バックアップを読み込みますか?\n(記録${d.transactions.length}件。現在のデータは上書きされます)`)) return;
       localStorage.setItem(LS_KEY, JSON.stringify(d));
-      S = load(); applyTheme();
+      S = load(); save(); // v1バックアップはここでv2に移行して永続化
+      applyTheme();
       UI.histMonth = curMonthKey(); UI.repMonth = curMonthKey();
       render(); toast('読み込みました');
     }catch(err){ alert('ファイルを読み込めませんでした。かんたん家計簿のバックアップJSONを選んでください。'); }
@@ -1243,6 +1563,11 @@ function loadSample(){
   const budgets = {'食費':40000,'日用品':10000,'外食':15000,'交通':10000,'趣味・娯楽':15000,'衣服・美容':10000,'水道光熱':15000,'通信':8000,'住居':85000};
   for(const [n,b] of Object.entries(budgets)){ const c = cat(n); if(c) c.budget = b; }
   S.settings.members = ['夫','妻','共同'];
+  S.settings.savingsInitial = 500000;
+  const savB = S.buckets.find(b => b.kind === 'saving');
+  const alwB = S.buckets.filter(b => b.kind === 'allowance');
+  const goal = {id:uid(), name:'沖縄旅行', targetAmount:200000};
+  S.goals = [goal];
   const key = curMonthKey();
   const months = [shiftMonth(key,-2), shiftMonth(key,-1), key];
   const tstr = todayStr();
@@ -1258,9 +1583,16 @@ function loadSample(){
     const d10 = new Date(start); d10.setDate(d10.getDate()+9);
     push(dstr(d10), 11000 + mi*800, '水道光熱', 2, '電気・ガス');
     push(dstr(d10), 7500, '通信', 2, 'スマホ2台');
-    const d24 = new Date(start); d24.setDate(d24.getDate()+24);
-    push(dstr(d24), 285000, '給与', 0, '給与');
-    push(dstr(d24), 180000, '給与', 1, '給与');
+    // 給与は月初に振込・振り分け済み(貯金と各自のお小遣いへ)
+    const salaries = [
+      {amount:285000, member:0, alloc:[{bucketId:savB.id, amount:50000, goalId:goal.id}, {bucketId:(alwB[0]||savB).id, amount:30000}]},
+      {amount:180000, member:1, alloc:[{bucketId:savB.id, amount:30000}, {bucketId:(alwB[1]||alwB[0]||savB).id, amount:20000}]}
+    ];
+    for(const sal of salaries){
+      const tx = {id:uid(), date:dstr(start), amount:sal.amount, categoryId:cat('給与').id,
+        memberIndex:sal.member, memo:'給与', special:false, alloc:sal.alloc};
+      if(tx.date <= tstr){ S.transactions.push(tx); syncAllocSavings(tx); }
+    }
     // daily-ish
     const foods = [[2,1280],[4,860],[6,2340],[9,1540],[11,980],[13,3200],[16,1750],[18,1120],[20,2680],[23,1490],[26,940],[28,2100]];
     for(const [off, amt] of foods){
@@ -1287,10 +1619,10 @@ function loadSample(){
   S.recurrings = [
     {id:uid(), name:'家賃', amount:85000, dayOfMonth:startDay(), categoryId:cat('住居').id, memberIndex:2,
       active:true, createdDate:fmtDate(monthRange(key)[0]), createdMonth:key.slice(0,7), lastApplied:tstr.slice(0,7)},
+    {id:uid(), name:'給与(夫)', amount:285000, dayOfMonth:startDay(), categoryId:cat('給与').id, memberIndex:0,
+      active:true, splits:[{bucketId:savB.id, amount:50000, goalId:goal.id}, {bucketId:(alwB[0]||savB).id, amount:30000}],
+      createdDate:fmtDate(monthRange(key)[0]), createdMonth:key.slice(0,7), lastApplied:tstr.slice(0,7)},
   ];
-  S.goals = [{id:uid(), name:'沖縄旅行', targetAmount:200000,
-    deposits:[{id:uid(), date:fmtDate(monthRange(shiftMonth(key,-1))[0]), amount:30000, memo:'先月分'},
-              {id:uid(), date:fmtDate(monthRange(key)[0]), amount:30000, memo:'今月分'}]}];
   save();
   UI.histMonth = curMonthKey(); UI.repMonth = curMonthKey();
   render(); toast('サンプルデータを投入しました');
@@ -1346,15 +1678,17 @@ document.addEventListener('click', e => {
     case 'repy-next': UI.repYear++; renderReport(); break;
     case 'goal-add': openGoalForm(null); break;
     case 'goal-edit': openGoalForm(id); break;
-    case 'goal-deposit': openDepositForm(id); break;
-    case 'goal-del': {
-      if(confirm('この目標を削除しますか?(積立の記録も消えます)')){
-        S.goals = S.goals.filter(g => g.id !== id); save(); render(); toast('削除しました');
+    case 'goal-deposit': openSavingForm('in', id); break;
+    case 'saving-in': openSavingForm('in'); break;
+    case 'saving-out': openSavingForm('out'); break;
+    case 'saving-del': {
+      if(confirm('この入出金記録を削除しますか?(貯金残高に反映されます)')){
+        S.savingTxs = S.savingTxs.filter(d => d.id !== id); save(); render();
       } break; }
-    case 'dep-del': {
-      const g = S.goals.find(x => x.id === id);
-      if(g && confirm('この積立記録を削除しますか?')){
-        g.deposits = g.deposits.filter(d => d.id !== el.dataset.dep); save(); render();
+    case 'goal-del': {
+      if(confirm('この目標を削除しますか?\n(積立てたお金は貯金残高に残ります)')){
+        for(const st of S.savingTxs) if(st.goalId === id) delete st.goalId;
+        S.goals = S.goals.filter(g => g.id !== id); save(); render(); toast('削除しました');
       } break; }
     case 'cat-add': openCatForm(null, el.dataset.type); break;
     case 'cat-edit': openCatForm(id); break;
@@ -1381,6 +1715,9 @@ document.addEventListener('click', e => {
       if(confirm('この定期取引を削除しますか?(過去に記帳された分は残ります)')){
         S.recurrings = S.recurrings.filter(r => r.id !== id); save(); renderSettings(); toast('削除しました');
       } break; }
+    case 'bucket-add': openBucketForm(null); break;
+    case 'bucket-edit': openBucketForm(id); break;
+    case 'bucket-del': delBucket(id); break;
     case 'mem-add': openMemberForm(null); break;
     case 'mem-edit': openMemberForm(Number(el.dataset.i)); break;
     case 'mem-del': delMember(Number(el.dataset.i)); break;
