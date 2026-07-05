@@ -271,7 +271,7 @@ const LS_KEY = "salon-mgr-v1";
 const DEFAULTS = {
   settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same", closedWd: [], closedDates: [] }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。closedWd: 定休日の曜日番号(0=日〜6=土)、closedDates: 臨時休業日['YYYY-MM-DD']。旧バックアップにはキーが無いため利用側でガードする
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
-  tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(支出のみ'10'|'8'|'0'),bulk(過去実績まとめ入力=true)}
+  tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(旧データの税区分。入力欄は廃止・CSV出力互換のため保持),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
   shifts: [],     // {id,staffId,date,start,end,brk,note}
   payAdj: {},     // key `${staffId}_${month}` -> {allow,deduct,memo,paid,booked}
@@ -359,7 +359,6 @@ const INCOME_CATS = ["カット","カラー","パーマ","縮毛矯正","トリ�
 const EXPENSE_CATS = ["材料費","店販仕入","家賃","水道光熱費","通信費","広告宣伝費","消耗品費","人件費","外注費","交通費","会議・交際費","研修費","修繕費","リース料","保険料","支払手数料","雑費"];
 const INV_CATS = ["施術材料","店販商品","備品・消耗品"];
 const PAY_METHODS = ["現金","カード","QR決済","その他"];
-const TAX_OPTS = [["10","10%(標準)"],["8","8%(軽減)"],["0","対象外(非課税・不課税)"]];
 /* ================= modal / forms ================= */
 let _form = null, _formImg = {};
 function openModal(html){ $("modal-root").innerHTML = `<div class="m-back" onclick="closeModal()"></div><div class="m-box">${html}</div>`; $("modal-root").classList.add("open"); }
@@ -1178,13 +1177,13 @@ VIEWS.money = function(){
     </div>
     <div class="card"><h2>明細 <span class="h2-sub">${list.length}件</span></h2>
       <div class="twrap">${list.length ? `<table>
-        <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>支払/税</th><th>担当</th><th>メモ</th><th></th></tr>
+        <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>支払方法</th><th>担当</th><th>メモ</th><th></th></tr>
         ${list.map(t => `<tr>
           <td style="white-space:nowrap">${fmtDate(t.date)}</td>
           <td><span class="chip ${t.type === "income" ? "info" : "mut"}">${t.type === "income" ? "収入" : "支出"}</span></td>
           <td>${esc(t.category)}</td>
           <td class="num" style="font-weight:600">${yen(t.amount)}</td>
-          <td style="font-size:12px;color:var(--ink2);white-space:nowrap">${t.type === "income" ? esc(t.pay || "現金") : (t.taxRate === "0" ? "対象外" : `税${esc(t.taxRate || "10")}%`)}</td>
+          <td style="font-size:12px;color:var(--ink2);white-space:nowrap">${t.type === "income" ? esc(t.pay || "現金") : ""}</td>
           <td>${t.staffId ? esc(staffName(t.staffId)) : ""}</td>
           <td style="color:var(--ink2);max-width:220px">${esc(t.memo)}</td>
           <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editTx('${t.id}')">編集</button><button class="btn sm ghost" onclick="delTx('${t.id}')">削除</button></td>
@@ -1219,8 +1218,7 @@ function recurringFields(){
     {key:"name", label:"名称(例: 家賃、リース料)", type:"text", required:true},
     {key:"amount", label:"金額(円)", type:"number", required:true, min:0, half:true},
     {key:"day", label:"毎月の計上日(1〜31)", type:"number", value:25, min:1, half:true},
-    {key:"category", label:"経費カテゴリ", type:"select", options: EXPENSE_CATS, value:"家賃"},
-    {key:"taxRate", label:"税区分", type:"select", options: TAX_OPTS}
+    {key:"category", label:"経費カテゴリ", type:"select", options: EXPENSE_CATS, value:"家賃"}
   ];
 }
 window.addRecurring = function(){
@@ -1255,7 +1253,7 @@ function yearSummaryHtml(yr){
     </div>
     ${expCat.length ? `<div class="twrap"><table><tr><th>経費カテゴリ</th><th class="num">年間合計</th></tr>
       ${expCat.map(([c,v]) => `<tr><td>${esc(c)}</td><td class="num">${yen(v)}</td></tr>`).join("")}</table></div>` : ""}
-    <div class="hint">経費の年間合計です。税区分つきの明細は各月のCSV出力をご利用ください。</div>
+    <div class="hint">経費の年間合計です。明細は各月のCSV出力をご利用ください。</div>
   </div>`;
 }
 function txFields(type){
@@ -1267,7 +1265,7 @@ function txFields(type){
       : {key:"category", label:"カテゴリ", type:"select", options: EXPENSE_CATS},
     ...(type === "income"
       ? [{key:"pay", label:"支払方法(レジ締めの集計に使用)", type:"select", options: PAY_METHODS}]
-      : [{key:"taxRate", label:"税区分(申告用CSVに出力)", type:"select", options: TAX_OPTS}]),
+      : []),
     {key:"staffId", label: type === "income" ? "担当スタッフ(歩合計算に使用)" : "関連スタッフ", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
     {key:"memo", label:"メモ", type:"text", placeholder: type === "income" ? "お客様名・メニューなど" : "支払先など"}
   ];
