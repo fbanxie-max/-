@@ -1901,23 +1901,53 @@ window.calcChange = function(){
     ? `会計 ${yen(total)} → お釣り <strong style="font-size:16px;color:${tender >= total ? "var(--good)" : "var(--crit)"}">${tender >= total ? yen(tender - total) : "不足 " + yen(total - tender)}</strong>`
     : "";
 };
+/* ---- 予約→顧客カルテの自動反映 ----
+   同名カルテが1件なら自動紐づけ。同姓同名が複数いる場合は電話番号の一致で自動特定し、
+   特定できなければ誕生日・電話・最終来店日つきの選択画面でどのお客様か選ぶ(別人として新規作成も可) */
+const normPhone = p => String(p || "").replace(/[^0-9]/g, "");
+function custBackfill(c, v){
+  if(v.kana && !c.kana) c.kana = v.kana;
+  if(v.phone && !c.phone) c.phone = v.phone;
+}
+function newCustomer(v){
+  const c = {id: uid(), name: v.name, kana: v.kana || "", phone: v.phone || "", birthday:"", memo:"", visits: []};
+  S.customers.push(c);
+  return c;
+}
+function resolveCustomer(v, done){ // done(cust, isNew)
+  const matches = S.customers.filter(x => x.name === v.name);
+  if(!matches.length){ done(newCustomer(v), true); return; }
+  if(matches.length === 1){ custBackfill(matches[0], v); done(matches[0], false); return; }
+  if(v.phone){
+    const hit = matches.filter(x => normPhone(x.phone) && normPhone(x.phone) === normPhone(v.phone));
+    if(hit.length === 1){ custBackfill(hit[0], v); done(hit[0], false); return; }
+  }
+  const fmtB = b => b ? b.split("-").map((x, i) => i ? +x : x).join("/") : "未登録";
+  const lastV = c => { const d = (c.visits || []).map(x => x.date).sort().pop(); return d ? fmtDate(d) : "来店記録なし"; };
+  window._pickCust = cid => {
+    closeModal();
+    if(cid){ const c = S.customers.find(x => x.id === cid); if(!c) return; custBackfill(c, v); done(c, false); }
+    else done(newCustomer(v), true);
+  };
+  openModal(`<h3>同姓同名のお客様がいます</h3>
+    <p style="font-size:13px;color:var(--ink2);margin-bottom:12px">「${esc(v.name)}」様のカルテが${matches.length}件あります。誕生日・電話番号・最終来店日を見て、どのお客様の予約か選んでください。</p>
+    ${matches.map(c => `<button class="btn" style="display:block;width:100%;text-align:left;margin-bottom:8px" onclick="_pickCust('${c.id}')">
+      <strong>${esc(c.name)}</strong><br>
+      <span style="font-size:12px;color:var(--muted)">誕生日 ${esc(fmtB(c.birthday))} ・ 電話 ${esc(c.phone || "未登録")} ・ 最終来店 ${lastV(c)}${c.memo ? ` ・ ${esc(c.memo.slice(0, 18))}` : ""}</span>
+    </button>`).join("")}
+    <button class="btn" style="display:block;width:100%;text-align:left" onclick="_pickCust('')"><strong>+ 新しいお客様として登録</strong><br><span style="font-size:12px;color:var(--muted)">上のどのお客様とも別人の場合</span></button>
+    <div class="m-foot"><button class="btn" onclick="closeModal()">保存を中止</button></div>`);
+}
 /* 保存前にダブルブッキングを検知。重複時は確認してから保存する */
 function saveApptWithCheck(v, id){
   const doSave = () => {
-    /* お客様を顧客カルテへ自動反映: 同名のカルテがあれば紐づけ、なければ新規作成(予約とカルテの二度手間を解消)。
-       既存カルテのフリガナ・電話が空欄なら予約フォームの入力で補完する */
     v.name = (v.name || "").trim();
-    let cust = S.customers.find(x => x.name === v.name);
-    const isNewCust = !cust;
-    if(!cust){ cust = {id: uid(), name: v.name, kana: v.kana || "", phone: v.phone || "", birthday:"", memo:"", visits: []}; S.customers.push(cust); }
-    else {
-      if(v.kana && !cust.kana) cust.kana = v.kana;
-      if(v.phone && !cust.phone) cust.phone = v.phone;
-    }
-    v.customerId = cust.id;
-    if(id){ const a = S.appts.find(x => x.id === id); if(a) Object.assign(a, v); }
-    else S.appts.push({id: uid(), status:"open", ...v});
-    save(); toast((id ? "更新しました" : "予約を追加しました") + (isNewCust ? `。${v.name}様のカルテを新規作成しました` : "")); render();
+    resolveCustomer(v, (cust, isNewCust) => {
+      v.customerId = cust.id;
+      if(id){ const a = S.appts.find(x => x.id === id); if(a) Object.assign(a, v); }
+      else S.appts.push({id: uid(), status:"open", ...v});
+      save(); toast((id ? "更新しました" : "予約を追加しました") + (isNewCust ? `。${v.name}様のカルテを新規作成しました` : "")); render();
+    });
   };
   const c = apptConflict(v, id);
   if(c) ask(`${staffName(v.staffId)}は ${fmtDate(c.date)} ${c.time}〜「${c.name}様」(${num(c.dur) || 60}分)の予約と時間帯が重複します。このまま保存しますか?`, doSave);
@@ -2085,38 +2115,43 @@ window.regConfirm = function(){
     .map(l => ({ name: (l.name || "").trim(), staffId: l.staffId, price: num(l.price), qty: regQtyOf(l), invId: l.invId || "" }))
     .filter(l => l.name && l.price > 0);
   if(!lines.length){ toast("メニュー名と金額を入れてください"); return; }
-  a.status = "done";
-  /* 複数明細は同じ会計(saleId)として記録し、客数・客単価は1会計=1客で数える。
-     料金表メニューは集計カテゴリへ解決して売上計上、カルテにはメニュー名のまま残す。
-     店販商品(invIdつき)は「店販(商品売上)」で計上し、その商品の在庫を個数分減算する */
-  const saleId = uid();
-  let used = [];
-  lines.forEach(l => {
-    const cat = l.invId ? "店販(商品売上)" : menuCat(l.name);
-    S.tx.push({id: uid(), saleId, type:"income", date: a.date, category: cat, amount: l.price * l.qty,
-      memo: `${a.name}様${l.qty > 1 ? `(${l.name}×${l.qty})` : ""}`, staffId: l.staffId, pay: REG.pay});
-    if(l.invId){
-      const it = S.inv.find(x => x.id === l.invId);
-      if(it){ it.qty = Math.max(0, num(it.qty) - l.qty); used.push(it.name); }
-    } else {
-      for(let k = 0; k < l.qty; k++) used = used.concat(consumeInv(cat));
+  /* カルテの特定を先に行う(未紐づけの旧予約で同姓同名がいる場合は選択画面が出る) */
+  const finish = c => {
+    a.status = "done";
+    a.customerId = c.id;
+    /* 複数明細は同じ会計(saleId)として記録し、客数・客単価は1会計=1客で数える。
+       料金表メニューは集計カテゴリへ解決して売上計上、カルテにはメニュー名のまま残す。
+       店販商品(invIdつき)は「店販(商品売上)」で計上し、その商品の在庫を個数分減算する */
+    const saleId = uid();
+    let used = [];
+    lines.forEach(l => {
+      const cat = l.invId ? "店販(商品売上)" : menuCat(l.name);
+      S.tx.push({id: uid(), saleId, type:"income", date: a.date, category: cat, amount: l.price * l.qty,
+        memo: `${a.name}様${l.qty > 1 ? `(${l.name}×${l.qty})` : ""}`, staffId: l.staffId, pay: REG.pay});
+      if(l.invId){
+        const it = S.inv.find(x => x.id === l.invId);
+        if(it){ it.qty = Math.max(0, num(it.qty) - l.qty); used.push(it.name); }
+      } else {
+        for(let k = 0; k < l.qty; k++) used = used.concat(consumeInv(cat));
+      }
+    });
+    const total = lines.reduce((x, l) => x + l.price * l.qty, 0);
+    c.visits.push({id: uid(), date: a.date, menu: lines.map(l => l.qty > 1 ? `${l.name}×${l.qty}` : l.name).join(" + "),
+      staffId: lines[0].staffId, price: total, note: REG.note, img: _formImg.regimg || ""});
+    let msg = "会計を記録し、カルテに反映しました";
+    if(REG.nextDate){
+      const nid = uid();
+      S.appts.push({id: nid, date: REG.nextDate, time: REG.nextTime || "10:00", name: a.name, customerId: c.id, menu: lines[0].name,
+        staffId: lines[0].staffId, price: total, status:"open", dur: a.dur || 60, nominated: a.nominated || "", memo:"次回予約"});
+      a.nextApptId = nid;
+      msg += `。次回予約 ${fmtDate(REG.nextDate)} を登録しました`;
     }
-  });
-  const total = lines.reduce((x, l) => x + l.price * l.qty, 0);
-  let c = S.customers.find(x => x.id === a.customerId) || S.customers.find(x => x.name === a.name);
-  if(!c){ c = {id: uid(), name: a.name, kana:"", phone:"", birthday:"", memo:"", visits: []}; S.customers.push(c); }
-  c.visits.push({id: uid(), date: a.date, menu: lines.map(l => l.qty > 1 ? `${l.name}×${l.qty}` : l.name).join(" + "),
-    staffId: lines[0].staffId, price: total, note: REG.note, img: _formImg.regimg || ""});
-  let msg = "会計を記録し、カルテに反映しました";
-  if(REG.nextDate){
-    const nid = uid();
-    S.appts.push({id: nid, date: REG.nextDate, time: REG.nextTime || "10:00", name: a.name, customerId: c.id, menu: lines[0].name,
-      staffId: lines[0].staffId, price: total, status:"open", dur: a.dur || 60, nominated: a.nominated || "", memo:"次回予約"});
-    a.nextApptId = nid;
-    msg += `。次回予約 ${fmtDate(REG.nextDate)} を登録しました`;
-  }
-  if(used.length) msg += `(在庫減算: ${used.join("、")})`;
-  closeModal(); save(); toast(msg); render();
+    if(used.length) msg += `(在庫減算: ${used.join("、")})`;
+    closeModal(); save(); toast(msg); render();
+  };
+  const byId = S.customers.find(x => x.id === a.customerId);
+  if(byId) finish(byId);
+  else resolveCustomer({ name: a.name, kana: "", phone: "" }, finish);
 };
 /* ================= register closing (レジ締め) ================= */
 window.closeNav = d => { V.closeDate = addDays(V.closeDate, d); render(); };
