@@ -1659,10 +1659,10 @@ VIEWS.inv = function(){
           <td class="num" style="font-weight:700">${i.qty}${esc(i.unit || "")}</td>
           <td style="white-space:nowrap"><button class="btn sm" onclick="invQty('${i.id}',-1)" aria-label="減らす">−</button> <button class="btn sm" onclick="invQty('${i.id}',1)" aria-label="増やす">+</button></td>
           <td class="num">${i.minQty}</td>
-          <td class="num">${yen(i.price)}</td>
+          <td class="num">${yen(i.price)}${i.category === "店販商品" ? `<div style="font-size:11px;color:var(--muted);white-space:nowrap">売価 ${yen(num(i.sell) > 0 ? i.sell : i.price)}</div>` : ""}</td>
           <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editInv('${i.id}')">編集</button><button class="btn sm ghost" onclick="delInv('${i.id}')">削除</button></td>
         </tr>`; }).join("")}</table>` : `<div class="empty">品目が未登録です。カラー剤・シャンプー・店販商品などを登録しましょう。</div>`}</div>
-      <div class="hint">在庫数が最低在庫を下回るとダッシュボードにアラートが表示されます。メニューに紐づけた品目は、該当メニューの売上を記録した時点で自動減算されます(記録の編集・削除では戻りません)。</div>
+      <div class="hint">在庫数が最低在庫を下回るとダッシュボードにアラートが表示されます。メニューに紐づけた品目は、該当メニューの売上を記録した時点で自動減算されます(記録の編集・削除では戻りません)。<strong>「店販商品」は会計画面(レジ)の「店販」ボタンに販売価格つきで表示され、売れた個数分だけ在庫が自動で減ります。</strong></div>
     </div>`;
 };
 function invFields(){
@@ -1672,7 +1672,8 @@ function invFields(){
     {key:"qty", label:"在庫数", type:"number", value:0, min:0, half:true},
     {key:"unit", label:"単位", type:"text", value:"個", half:true},
     {key:"minQty", label:"最低在庫(下回るとアラート)", type:"number", value:1, min:0, half:true},
-    {key:"price", label:"参考単価(円)", type:"number", value:0, min:0, half:true},
+    {key:"price", label:"参考単価(円・仕入値。在庫評価額に使用)", type:"number", value:0, min:0, half:true},
+    {key:"sell", label:"販売価格(円・店販商品用。レジの「店販」ボタンに表示。空欄なら参考単価を使用)", type:"number", min:0},
     {key:"menuCat", label:"メニューに紐づけ(該当メニューの売上記録時に自動減算)", type:"select", blank:"(紐づけない)", options: INCOME_CATS.slice(0,-1)},
     {key:"useQty", label:"1回あたり使用量", type:"number", value:1, min:0, step:"0.1"}
   ];
@@ -1962,6 +1963,18 @@ window.regAddMenu = function(menuId){
   else REG.lines.push({ name: mn.name, staffId: (REG.lines[0] || {}).staffId || "", price: num(mn.price), qty: 1 });
   renderRegister();
 };
+/* 店販商品(在庫管理)からの追加。売価は販売価格(未設定なら参考単価)、確定時にその商品の在庫を減算する */
+window.regAddRetail = function(invId){
+  regCapture();
+  const it = S.inv.find(x => x.id === invId); if(!it) return;
+  const price = num(it.sell) > 0 ? num(it.sell) : num(it.price);
+  const ex = REG.lines.find(l => l.invId === invId);
+  const blank = REG.lines.find(l => !(l.name || "").trim() && !num(l.price));
+  if(ex) ex.qty = regQtyOf(ex) + 1;
+  else if(blank) Object.assign(blank, { name: it.name, price, qty: 1, invId });
+  else REG.lines.push({ name: it.name, staffId: (REG.lines[0] || {}).staffId || "", price, qty: 1, invId });
+  renderRegister();
+};
 window.regAddFree = function(){
   regCapture();
   const name = ($("reg-fname").value || "").trim(), price = num($("reg-fprice").value);
@@ -1990,7 +2003,8 @@ function renderRegister(){
   const a = S.appts.find(x => x.id === REG.apptId);
   const cats = [];
   S.menus.forEach(mn => { const c = mn.cat || "その他収入"; if(!cats.includes(c)) cats.push(c); });
-  const menus = S.menus.filter(mn => REG.catTab === "all" || (mn.cat || "その他収入") === REG.catTab);
+  const menus = REG.catTab === "retail" ? [] : S.menus.filter(mn => REG.catTab === "all" || (mn.cat || "その他収入") === REG.catTab);
+  const retail = S.inv.filter(i => i.category === "店販商品");
   const staffOpts = sel => `<option value="">(なし)</option>` + S.staff.map(s => `<option value="${s.id}" ${s.id === sel ? "selected" : ""}>${esc(s.name)}</option>`).join("");
   openModal(`
     <h3>${esc(REG.name)} 様の会計 <span class="h2-sub">${a ? `${fmtDate(a.date)} ${esc(a.time || "")}` : ""}</span></h3>
@@ -2008,10 +2022,17 @@ function renderRegister(){
     <div class="reg-cats">
       <button class="btn sm ${REG.catTab === "all" ? "pri" : ""}" onclick="regTab('all')">すべて</button>
       ${cats.map(c => `<button class="btn sm ${REG.catTab === c ? "pri" : ""}" onclick="regTab('${esc(c)}')">${esc(c)}</button>`).join("")}
+      ${retail.length ? `<button class="btn sm ${REG.catTab === "retail" ? "pri" : ""}" onclick="regTab('retail')">店販</button>` : ""}
     </div>
     <div class="reg-menus">
-      ${menus.length ? menus.map(mn => `<button class="btn sm" onclick="regAddMenu('${mn.id}')">${esc(mn.name)} <span style="color:var(--muted)">${yen(mn.price)}</span></button>`).join("")
-        : `<span class="hint">メニュー料金表が未登録です(その他→メニュー料金表)。下の自由入力からも追加できます。</span>`}
+      ${(() => {
+        const btns = [
+          ...menus.map(mn => `<button class="btn sm" onclick="regAddMenu('${mn.id}')">${esc(mn.name)} <span style="color:var(--muted)">${yen(mn.price)}</span></button>`),
+          ...((REG.catTab === "all" || REG.catTab === "retail") ? retail.map(i => `<button class="btn sm" onclick="regAddRetail('${i.id}')">${esc(i.name)} <span style="color:var(--muted)">${yen(num(i.sell) > 0 ? i.sell : i.price)}${num(i.qty) <= 0 ? " ・在庫切れ" : ""}</span></button>`) : [])
+        ];
+        return btns.length ? btns.join("")
+          : `<span class="hint">メニュー料金表・在庫の「店販商品」が未登録です。登録するとここにタップで追加できるボタンが並びます(下の自由入力からも追加できます)。</span>`;
+      })()}
     </div>
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center">
       <input id="reg-fname" placeholder="自由入力(店販・特別対応など)" style="max-width:200px">
@@ -2045,19 +2066,25 @@ window.regConfirm = function(){
   regCapture();
   const a = S.appts.find(x => x.id === REG.apptId); if(!a) return;
   const lines = REG.lines
-    .map(l => ({ name: (l.name || "").trim(), staffId: l.staffId, price: num(l.price), qty: regQtyOf(l) }))
+    .map(l => ({ name: (l.name || "").trim(), staffId: l.staffId, price: num(l.price), qty: regQtyOf(l), invId: l.invId || "" }))
     .filter(l => l.name && l.price > 0);
   if(!lines.length){ toast("メニュー名と金額を入れてください"); return; }
   a.status = "done";
   /* 複数明細は同じ会計(saleId)として記録し、客数・客単価は1会計=1客で数える。
-     料金表メニューは集計カテゴリへ解決して売上計上、カルテにはメニュー名のまま残す */
+     料金表メニューは集計カテゴリへ解決して売上計上、カルテにはメニュー名のまま残す。
+     店販商品(invIdつき)は「店販(商品売上)」で計上し、その商品の在庫を個数分減算する */
   const saleId = uid();
   let used = [];
   lines.forEach(l => {
-    const cat = menuCat(l.name);
+    const cat = l.invId ? "店販(商品売上)" : menuCat(l.name);
     S.tx.push({id: uid(), saleId, type:"income", date: a.date, category: cat, amount: l.price * l.qty,
       memo: `${a.name}様${l.qty > 1 ? `(${l.name}×${l.qty})` : ""}`, staffId: l.staffId, pay: REG.pay});
-    for(let k = 0; k < l.qty; k++) used = used.concat(consumeInv(cat));
+    if(l.invId){
+      const it = S.inv.find(x => x.id === l.invId);
+      if(it){ it.qty = Math.max(0, num(it.qty) - l.qty); used.push(it.name); }
+    } else {
+      for(let k = 0; k < l.qty; k++) used = used.concat(consumeInv(cat));
+    }
   });
   const total = lines.reduce((x, l) => x + l.price * l.qty, 0);
   let c = S.customers.find(x => x.id === a.customerId) || S.customers.find(x => x.name === a.name);
@@ -2571,7 +2598,7 @@ window.seedSample = function(){
       memo:"パーマ常連だったが最近来店なし", visits:[{id: uid(), date: addDays(t, -95), menu:"パーマ", staffId: s1, price:12000, note:""}]});
   S.inv.push(
     {id: i1, name:"カラー剤 アッシュ8", category:"施術材料", qty:2, unit:"本", minQty:3, price:800, menuCat:"カラー", useQty:1},
-    {id: i2, name:"シャンプー(店販)", category:"店販商品", qty:10, unit:"本", minQty:5, price:1600});
+    {id: i2, name:"シャンプー(店販)", category:"店販商品", qty:10, unit:"本", minQty:5, price:800, sell:2200});
   S.tx.push(
     {id: uid(), type:"income", date: t, category:"カット", amount:4950, memo:"サンプル", staffId: s1, pay:"現金"},
     {id: uid(), type:"income", date: t, category:"カラー", amount:9800, memo:"山本様", staffId: s1, pay:"カード"},
