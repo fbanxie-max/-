@@ -397,8 +397,9 @@ function fieldHtml(f, val){
     inner = `<input type="file" id="${id}" accept="image/*" onchange="onImgPick('${f.key}',this)"><div id="${id}-prev">${prev}</div>`;
   } else {
     const t = f.type || "text";
-    const extra = (t === "number" ? ` inputmode="decimal" step="${f.step || "1"}" min="${f.min ?? ""}"` : "") + (f.oninput ? ` oninput="${esc(f.oninput)}"` : "");
-    inner = `<input type="${t}" id="${id}" value="${esc(val)}"${extra}${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ""}>`;
+    const extra = (t === "number" ? ` inputmode="decimal" step="${f.step || "1"}" min="${f.min ?? ""}"` : "") + (f.oninput ? ` oninput="${esc(f.oninput)}"` : "") + (f.list ? ` list="${id}-dl" autocomplete="off"` : "");
+    inner = `<input type="${t}" id="${id}" value="${esc(val)}"${extra}${f.placeholder ? ` placeholder="${esc(f.placeholder)}"` : ""}>`
+      + (f.list ? `<datalist id="${id}-dl">${f.list.map(o => `<option value="${esc(o)}"></option>`).join("")}</datalist>` : "");
   }
   return `<div class="f-row"${f.half ? ' data-half="1"' : ""}><label for="${id}">${esc(f.label)}${reqMark}</label>${inner}${f.note ? `<div class="hint" id="${id}-note"></div>` : ""}</div>`;
 }
@@ -1880,7 +1881,9 @@ function apptFields(){
   return [
     {key:"date", label:"日付", type:"date", value: V.apptDate, required:true, half:true},
     {key:"time", label:"時刻", type:"time", value:"10:00", required:true, half:true},
-    {key:"name", label:"お客様名", type:"text", required:true},
+    {key:"name", label:"お客様名(入力すると既存のお客様候補が出ます)", type:"text", required:true, list: S.customers.map(c => c.name)},
+    {key:"kana", label:"フリガナ(新規のお客様のみ・任意)", type:"text", half:true},
+    {key:"phone", label:"電話番号(新規のお客様のみ・任意)", type:"tel", half:true},
     {key:"menu", label:"メニュー(料金表から選ぶと金額・所要時間が自動入力)", type:"select", options: menuSelOptions(INCOME_CATS.slice(0,-1)), onchange:"menuPick(this,'ff-price','ff-dur')"},
     {key:"staffId", label:"担当", type:"select", blank:"(未定)", options: S.staff.map(s => [s.id, s.name])},
     {key:"dur", label:"所要時間(分)", type:"number", value:60, min:0, half:true},
@@ -1901,9 +1904,20 @@ window.calcChange = function(){
 /* 保存前にダブルブッキングを検知。重複時は確認してから保存する */
 function saveApptWithCheck(v, id){
   const doSave = () => {
+    /* お客様を顧客カルテへ自動反映: 同名のカルテがあれば紐づけ、なければ新規作成(予約とカルテの二度手間を解消)。
+       既存カルテのフリガナ・電話が空欄なら予約フォームの入力で補完する */
+    v.name = (v.name || "").trim();
+    let cust = S.customers.find(x => x.name === v.name);
+    const isNewCust = !cust;
+    if(!cust){ cust = {id: uid(), name: v.name, kana: v.kana || "", phone: v.phone || "", birthday:"", memo:"", visits: []}; S.customers.push(cust); }
+    else {
+      if(v.kana && !cust.kana) cust.kana = v.kana;
+      if(v.phone && !cust.phone) cust.phone = v.phone;
+    }
+    v.customerId = cust.id;
     if(id){ const a = S.appts.find(x => x.id === id); if(a) Object.assign(a, v); }
     else S.appts.push({id: uid(), status:"open", ...v});
-    save(); toast(id ? "更新しました" : "予約を追加しました"); render();
+    save(); toast((id ? "更新しました" : "予約を追加しました") + (isNewCust ? `。${v.name}様のカルテを新規作成しました` : "")); render();
   };
   const c = apptConflict(v, id);
   if(c) ask(`${staffName(v.staffId)}は ${fmtDate(c.date)} ${c.time}〜「${c.name}様」(${num(c.dur) || 60}分)の予約と時間帯が重複します。このまま保存しますか?`, doSave);
@@ -1915,7 +1929,9 @@ window.addAppt = function(){
 };
 window.editAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
-  openForm({ title:"予約を編集", fields: apptFields(), data: a,
+  /* 紐づいたカルテのフリガナ・電話をフォームに補完表示する */
+  const cust = S.customers.find(x => x.id === a.customerId) || S.customers.find(x => x.name === a.name);
+  openForm({ title:"予約を編集", fields: apptFields(), data: {...a, kana: a.kana || (cust ? cust.kana : ""), phone: a.phone || (cust ? cust.phone : "")},
     onsave: v => saveApptWithCheck(v, id) });
 };
 window.delAppt = function(id){
