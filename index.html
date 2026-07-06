@@ -847,7 +847,7 @@ VIEWS.dash = function(){
   const hasData = S.tx.length > 0;
   $("main").innerHTML =
     pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
-      `<button class="btn pri" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button><button class="btn" onclick="openReport()">月次レポート</button>`) +
+      `<button class="btn pri" onclick="openDailySale()">+ 1日の売上まとめ</button><button class="btn" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button><button class="btn" onclick="openReport()">月次レポート</button>`) +
     setupGuideHtml() +
     heroHtml() +
     (S.menus.length ? `<div class="card"><h2>クイック会計 <span class="h2-sub">タップで今日の売上を記録</span></h2>
@@ -862,18 +862,22 @@ VIEWS.dash = function(){
     </div>
     <div class="card"><h2>日別売上 <span class="h2-sub">直近7日 ・ 行をタップでその日のレジ締めへ</span></h2>
       <div class="twrap"><table>
-        <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th>レジ締め</th></tr>
+        <tr><th>日付</th><th class="num">売上</th><th class="num">うち店販</th><th class="num">件数</th><th>レジ締め</th><th></th></tr>
         ${Array.from({length: 7}, (_, i) => addDays(tday, -i)).map(d => {
           const list = S.tx.filter(t => t.type === "income" && t.date === d && !t.bulk);
           const v = list.reduce((a, t) => a + num(t.amount), 0);
+          const rt = list.filter(t => t.category === "店販(商品売上)").reduce((a, t) => a + num(t.amount), 0);
           const closed = S.closings[d] && S.closings[d].closed;
           return `<tr class="rowlink" onclick="openDayClose('${d}')"${d === tday ? ' style="background:var(--accent-soft)"' : ""}>
             <td style="white-space:nowrap;font-weight:600">${fmtDate(d)}${d === tday ? ' <span class="chip info">今日</span>' : ""}</td>
             <td class="num" style="font-weight:700">${yen(v)}</td>
+            <td class="num" style="color:var(--ink2)">${rt ? yen(rt) : "—"}</td>
             <td class="num">${salesCount(list)}件</td>
             <td>${closed ? '<span class="chip good">締め済</span>' : (v > 0 ? '<span class="chip warn">未締め</span>' : '<span style="color:var(--muted);font-size:12px">—</span>')}</td>
+            <td><button class="btn sm ghost" onclick="event.stopPropagation();openDailySale('${d}')">入力</button></td>
           </tr>`; }).join("")}
       </table></div>
+      <div class="hint">「入力」でその日の技術売上・店販売上をまとめて記入できます(同じ日は上書き)。1件ずつの記録(レジ・クイック会計)と併用もできます。</div>
     </div>
     <div class="grid2" style="margin-bottom:16px">
       <div class="card"><h2>今日の予約 <span class="h2-sub">${apptsToday.length}件</span></h2>
@@ -1310,6 +1314,36 @@ function txFields(type){
     {key:"memo", label:"メモ", type:"text", placeholder: type === "income" ? "お客様名・メニューなど" : "支払先など"}
   ];
 }
+/* ---- 1日の売上まとめ入力(日計) ----
+   技術売上・店販売上を1日1回まとめて記録する。同じ日に入れ直すと上書き(重複しない)。
+   dailyフラグつきで保存し、収支管理から編集を開いたときもこのフォームに戻す */
+const DAILY_CATS = [["tech", "技術売上"], ["retail", "店販(商品売上)"]];
+window.openDailySale = function(date){
+  const d = date || todayStr();
+  const cur = { date: d };
+  DAILY_CATS.forEach(([k, cat]) => {
+    const ex = S.tx.filter(t => t.daily && t.type === "income" && t.date === d && t.category === cat);
+    cur[k] = ex.reduce((a, t) => a + num(t.amount), 0) || "";
+    if(ex.length){ cur.pay = ex[0].pay; if(ex[0].memo !== "1日まとめ") cur.memo = ex[0].memo; }
+  });
+  openForm({ title: "1日の売上まとめ入力", data: cur, saveLabel: "保存(同じ日は上書き)",
+    fields: [
+      {key:"date", label:"日付", type:"date", value: d, required:true},
+      {key:"tech", label:"技術売上(円)", type:"number", min:0, half:true},
+      {key:"retail", label:"店販売上(円)", type:"number", min:0, half:true},
+      {key:"pay", label:"支払方法(レジ締めの集計に使用。混在の日は「その他」推奨)", type:"select", options: PAY_METHODS},
+      {key:"memo", label:"メモ(任意)", type:"text"}
+    ],
+    onsave: v => {
+      let changed = false;
+      DAILY_CATS.forEach(([k, cat]) => {
+        const val = Math.max(0, num(v[k]));
+        S.tx = S.tx.filter(t => !(t.daily && t.type === "income" && t.date === v.date && t.category === cat));
+        if(val > 0){ S.tx.push({id: uid(), daily: true, type: "income", date: v.date, category: cat, amount: val, memo: v.memo || "1日まとめ", staffId: "", pay: v.pay || "現金"}); changed = true; }
+      });
+      save(); toast(changed ? `${fmtDate(v.date)}の売上まとめを保存しました` : `${fmtDate(v.date)}のまとめ入力を削除しました`); render();
+    } });
+};
 window.addTx = function(type){
   openForm({ title: type === "income" ? "収入を記録" : "支出を記録", fields: txFields(type),
     onsave: v => {
@@ -1321,6 +1355,7 @@ window.addTx = function(type){
 };
 window.editTx = function(id){
   const t = S.tx.find(x => x.id === id); if(!t) return;
+  if(t.daily && t.type === "income"){ openDailySale(t.date); return; } // 日計まとめはまとめフォームで編集
   openForm({ title:"記録を編集", fields: txFields(t.type), data: t,
     onsave: v => {
       if(t.type === "income") v.category = menuCat(v.category);
