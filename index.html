@@ -1431,8 +1431,9 @@ window.editShift = function(id){
 window.payNav = d => { V.payMonth = addMonths(V.payMonth, d); render(); };
 VIEWS.payroll = function(){
   const m = V.payMonth;
+  const staffList = S.staff.filter(st => staffActiveIn(st, m));
   let sumTotal = 0;
-  const rows = S.staff.map(st => {
+  const rows = staffList.map(st => {
     const p = calcPay(st, m);
     sumTotal += p.total;
     return `<tr>
@@ -1461,12 +1462,32 @@ VIEWS.payroll = function(){
           <tr class="total"><td>合計</td><td></td><td></td><td></td><td></td><td></td><td class="num">${yen(sumTotal)}</td><td></td><td></td></tr>
         </table></div>
         <div class="hint">勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。締日・支払日は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</div></div>`
+        + payProfitHtml(m, sumTotal)
         + productivityHtml(m)
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
 };
+/* 利益カード: 売上 − 経費 − 給料 = 利益。
+   「支出に計上」済みの給与は人件費カテゴリに入るため、二重に引かないよう
+   経費からは人件費カテゴリを除外し、給料は給与計算(支給額合計)側で数える */
+function payProfitHtml(m, payTotal){
+  const list = txInMonth(m);
+  const inc = list.filter(t => t.type === "income").reduce((a, t) => a + num(t.amount), 0);
+  const expOther = list.filter(t => t.type === "expense" && t.category !== "人件費").reduce((a, t) => a + num(t.amount), 0);
+  const expLabor = list.filter(t => t.type === "expense" && t.category === "人件費").reduce((a, t) => a + num(t.amount), 0);
+  const profit = inc - expOther - payTotal;
+  return `<div class="card"><h2>${fmtMonth(m)}の利益 <span class="h2-sub">売上 − 経費 − 給料</span></h2>
+    <div class="twrap"><table>
+      <tr><td style="color:var(--muted);width:240px">売上(${fmtMonth(m)}・暦月)</td><td class="num">${yen(inc)}</td></tr>
+      <tr><td style="color:var(--muted)">経費(人件費カテゴリを除く)</td><td class="num">− ${yen(expOther)}</td></tr>
+      <tr><td style="color:var(--muted)">給料(${fmtMonth(m)}分の支給額合計)</td><td class="num">− ${yen(payTotal)}</td></tr>
+      <tr class="total"><td>利益</td><td class="num" style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</td></tr>
+    </table></div>
+    <div class="hint">給料は締日ベース(${fmtMonth(m)}分)、売上・経費は暦月(${fmtMonth(m)}の1日〜末日)の集計です。「支出に計上」した給与など人件費カテゴリの支出${expLabor ? `(${yen(expLabor)})` : ""}は、二重に引かないよう経費から除外し「給料」の行でのみ数えています。</div>
+  </div>`;
+}
 /* スタッフ生産性: 時間あたり売上と労働分配率(支給額÷担当売上) */
 function productivityHtml(m){
-  const rows = S.staff.map(st => ({ st, p: calcPay(st, m) })).filter(x => x.p.sales > 0 || x.p.hours > 0);
+  const rows = S.staff.filter(st => staffActiveIn(st, m)).map(st => ({ st, p: calcPay(st, m) })).filter(x => x.p.sales > 0 || x.p.hours > 0);
   if(!rows.length) return "";
   return `<div class="card"><h2>スタッフ生産性 <span class="h2-sub">${fmtMonth(m)}</span></h2>
     <div class="twrap"><table>
@@ -1511,7 +1532,7 @@ window.bookPay = function(staffId){
 window.exportPayCsv = function(){
   const m = V.payMonth;
   const rows = [["スタッフ","勤務時間","基本給","担当売上","歩合","手当","控除","支給額","状態"]];
-  S.staff.forEach(st => {
+  S.staff.filter(st => staffActiveIn(st, m)).forEach(st => {
     const p = calcPay(st, m);
     rows.push([st.name, p.hours.toFixed(1), p.base, p.sales, p.comm, p.allow, p.deduct, p.total, p.paid ? "支払済" : "未払"]);
   });
@@ -1523,15 +1544,17 @@ VIEWS.staff = function(){
     pageHead("スタッフ登録", "シフト・給料計算の基礎になる情報です",
       `<button class="btn pri" onclick="addStaff()">+ スタッフを追加</button>`) +
     `<div class="card"><div class="twrap">${S.staff.length ? `<table>
-      <tr><th>名前</th><th>役職</th><th>給与形態</th><th class="num">基本額</th><th class="num">歩合率</th><th></th></tr>
-      ${S.staff.map(st => `<tr>
+      <tr><th>名前</th><th>役職</th><th>状態</th><th>給与形態</th><th class="num">基本額</th><th class="num">歩合率</th><th></th></tr>
+      ${S.staff.map(st => `<tr${st.retireM ? ' style="opacity:.65"' : ""}>
         <td style="font-weight:600">${esc(st.name)}</td>
         <td>${esc(st.role)}</td>
+        <td style="white-space:nowrap">${st.retireM ? `<span class="chip mut">退社(${fmtMonth(st.retireM)}まで)</span>` : '<span class="chip good">在籍</span>'}</td>
         <td>${st.payType === "monthly" ? "月給" : "時給"}</td>
         <td class="num">${yen(st.wage)}${st.payType === "monthly" ? "/月" : "/時"}</td>
         <td class="num">${num(st.commission)}%</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editStaff('${st.id}')">編集</button><button class="btn sm ghost" onclick="delStaff('${st.id}')">削除</button></td>
-      </tr>`).join("")}</table>` : `<div class="empty">スタッフが未登録です。「+ スタッフを追加」から登録してください。</div>`}</div></div>`;
+      </tr>`).join("")}</table>` : `<div class="empty">スタッフが未登録です。「+ スタッフを追加」から登録してください。</div>`}</div>
+    <div class="hint">退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
 };
 function staffFields(){
   return [
@@ -1539,9 +1562,13 @@ function staffFields(){
     {key:"role", label:"役職", type:"select", options:["スタイリスト","トップスタイリスト","アシスタント","レセプション","店長","オーナー"]},
     {key:"payType", label:"給与形態", type:"select", options:[["hourly","時給"],["monthly","月給"]], half:true},
     {key:"wage", label:"時給/月給(円)", type:"number", required:true, min:0, half:true},
-    {key:"commission", label:"歩合率(担当売上に対する%)", type:"number", value:0, min:0, step:"0.5"}
+    {key:"commission", label:"歩合率(担当売上に対する%)", type:"number", value:0, min:0, step:"0.5"},
+    {key:"joinM", label:"入社月(任意・この月分から給与計算)", type:"month", half:true},
+    {key:"retireM", label:"退社月(任意・この月分まで給与計算)", type:"month", half:true}
   ];
 }
+/* その月分の給与対象か(入社月〜退社月の範囲内)。未設定はずっと在籍扱い */
+const staffActiveIn = (st, m) => (!st.joinM || st.joinM <= m) && (!st.retireM || m <= st.retireM);
 window.addStaff = function(){
   openForm({ title:"スタッフを追加", fields: staffFields(),
     onsave: v => { S.staff.push({id: uid(), ...v}); save(); toast("追加しました"); render(); } });
@@ -2358,7 +2385,7 @@ window.openPayslips = function(){ go("payslip"); };
 VIEWS.payslip = function(){
   const m = V.payMonth;
   const pp = payPeriod(m);
-  const cards = S.staff.map(st => {
+  const cards = S.staff.filter(st => staffActiveIn(st, m)).map(st => {
     const p = calcPay(st, m);
     return `<div class="card" style="max-width:560px">
       <h2>給与明細 <span class="h2-sub">${fmtMonth(m)}分</span></h2>
@@ -2379,7 +2406,7 @@ VIEWS.payslip = function(){
   $("main").innerHTML =
     pageHead("給与明細", `${esc(S.settings.name)} ・ ${fmtMonth(m)}分(${fmtDate(pp.from)}〜${fmtDate(pp.to)})・ 支払日 ${fmtDate(payDate(m))}`,
       `<button class="btn" onclick="go('payroll')">‹ 給料管理へ</button>${monthNav(m, "payNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button>`) +
-    (S.staff.length ? cards : `<div class="card"><div class="empty">スタッフが未登録です</div></div>`);
+    (cards || `<div class="card"><div class="empty">${S.staff.length ? `${fmtMonth(m)}分の給与対象スタッフがいません(入社前・退社後の月です)` : "スタッフが未登録です"}</div></div>`);
 };
 /* ================= bulk past-data entry (過去実績まとめ入力・ナビ非掲載) ================= */
 window.openBulk = function(){ go("bulk"); };
