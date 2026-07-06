@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f7f6f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
 <title>サロン経営管理</title>
 <style>
 :root{
@@ -223,6 +225,10 @@ td.today-col{background:var(--accent-soft)}
   .nav-sec{display:none}
   #main{padding:16px 14px 56px}
   .f-2col{grid-template-columns:1fr}
+  /* iOSは16px未満の入力欄タップで画面が自動ズームするため、スマホでは16pxにする */
+  input,select,textarea{font-size:16px}
+  /* モーダルが画面端に張り付かないよう左右に余白を確保 */
+  .m-box{margin:12px 8px;max-height:calc(100vh - 24px)}
 }
 #storagewarn{position:sticky;top:0;z-index:200;background:var(--warn-chip);color:var(--warn);font-size:12.5px;font-weight:600;line-height:1.5;padding:8px 14px;text-align:center;border-bottom:1px solid var(--line2)}
 @media print{
@@ -308,18 +314,31 @@ function idbOpen(){
 }
 const idbGet = () => new Promise((res, rej) => { const rq = _idb.transaction(IDB_STORE).objectStore(IDB_STORE).get("S"); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
 const idbPut = v => new Promise((res, rej) => { const rq = _idb.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).put(v, "S"); rq.onsuccess = () => res(); rq.onerror = () => rej(rq.error); });
+/* 旧バージョン・手編集されたバックアップでも画面が壊れないよう、読み込んだデータを補正する。
+   - 一覧系のキーは必ず配列/オブジェクトにする(欠けていたら初期値)
+   - settingsは初期値と合成(古いバックアップに無い設定キーを補う)
+   - 顧客のvisits(来店履歴)が無い場合は空配列にする(一覧・詳細で参照するため) */
+function normalizeState(d){
+  const s = Object.assign(structuredClone(DEFAULTS), d);
+  for(const k of ["staff","tx","receipts","shifts","orders","inv","customers","appts","tickets","menus","recurring"])
+    if(!Array.isArray(s[k])) s[k] = [];
+  for(const k of ["payAdj","closings"]) if(!s[k] || typeof s[k] !== "object") s[k] = {};
+  s.settings = Object.assign(structuredClone(DEFAULTS.settings), (d && d.settings) || {});
+  s.customers.forEach(c => { if(!Array.isArray(c.visits)) c.visits = []; });
+  return s;
+}
 function loadStateLS(){
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(!raw) return structuredClone(DEFAULTS);
-    return Object.assign(structuredClone(DEFAULTS), JSON.parse(raw));
+    return normalizeState(JSON.parse(raw));
   }catch(e){ return structuredClone(DEFAULTS); }
 }
 async function loadState(){
   try{
     _idb = await idbOpen();
     const d = await idbGet();
-    if(d && typeof d === "object") return Object.assign(structuredClone(DEFAULTS), d);
+    if(d && typeof d === "object") return normalizeState(d);
     const migrated = loadStateLS();
     await idbPut(migrated);
     return migrated;
@@ -366,8 +385,10 @@ const INV_CATS = ["施術材料","店販商品","備品・消耗品"];
 const PAY_METHODS = ["現金","カード","QR決済","その他"];
 /* ================= modal / forms ================= */
 let _form = null, _formImg = {};
-function openModal(html){ $("modal-root").innerHTML = `<div class="m-back" onclick="closeModal()"></div><div class="m-box">${html}</div>`; $("modal-root").classList.add("open"); }
-document.addEventListener("keydown", e => { if(e.key === "Escape" && $("modal-root").classList.contains("open")) closeModal(); });
+let _dismiss = null; // 背景クリック・Escで閉じる動作の横取り用(レジなど入力量の多い画面で誤操作による消失を防ぐ)
+function openModal(html){ _dismiss = null; $("modal-root").innerHTML = `<div class="m-back" onclick="dismissModal()"></div><div class="m-box">${html}</div>`; $("modal-root").classList.add("open"); }
+window.dismissModal = function(){ if(_dismiss) _dismiss(); else closeModal(); };
+document.addEventListener("keydown", e => { if(e.key === "Escape" && $("modal-root").classList.contains("open")) dismissModal(); });
 function closeModal(){ $("modal-root").classList.remove("open"); $("modal-root").innerHTML = ""; _form = null; _formImg = {}; }
 function ask(msg, onYes){
   window._askYes = () => { closeModal(); onYes(); };
@@ -427,9 +448,15 @@ function submitForm(e){
     const elx = $("ff-" + f.key);
     if(f.type === "image"){ vals[f.key] = _formImg[f.key] || ""; continue; }
     let v = elx ? elx.value : "";
+    /* 必須チェックは変換前の生の入力で行う(数値欄は空でもnum()で0になり素通りするため) */
+    if(f.required && String(v).trim() === ""){ toast(`「${f.label}」を入力してください`); if(elx) elx.focus(); return false; }
     if(f.type === "number") v = num(v);
     vals[f.key] = v;
-    if(f.required && (v === "" || v === null)){ toast(`「${f.label}」を入力してください`); elx.focus(); return false; }
+  }
+  /* 追加の検証(重複名・時刻の前後関係など)。エラー文字列を返すと閉じずに入力を残す */
+  if(_form.validate){
+    const err = _form.validate(vals);
+    if(err){ toast(err); return false; }
   }
   const cb = _form.onsave;
   closeModal();
@@ -997,7 +1024,10 @@ VIEWS.report = function(){
   let outlook = "";
   if(isCur){
     const day = +todayStr().slice(8), dim = daysInMonth(m);
-    const forecast = day >= 3 ? Math.round(s.inc / day * dim) : null;
+    /* ダッシュボードのヒーローカードと同じ営業日ベースで着地見込みを出す(数字の食い違いを防ぐ) */
+    const eom = m + "-" + String(dim).padStart(2, "0");
+    const bizPassed = bizDaysBetween(m + "-01", todayStr()), bizTotal = bizDaysBetween(m + "-01", eom);
+    const forecast = day >= 3 ? Math.round(s.inc / Math.max(1, bizPassed) * bizTotal) : null;
     const target = targetFor(m);
     outlook = `<div class="card"><h2>今月の見通し <span class="h2-sub">${day}日経過 / ${dim}日</span></h2>
       <div class="hr-sub">
@@ -1478,10 +1508,10 @@ function shiftFields(){
     {key:"note", label:"メモ", type:"text", half:true}
   ];
 }
+const shiftValidate = v => toMin(v.end) <= toMin(v.start) ? "終了時刻は開始より後にしてください" : "";
 window.addShift = function(staffId, date){
-  openForm({ title: `${staffName(staffId)} ・ ${fmtDate(date)} のシフト`, fields: shiftFields(),
+  openForm({ title: `${staffName(staffId)} ・ ${fmtDate(date)} のシフト`, fields: shiftFields(), validate: shiftValidate,
     onsave: v => {
-      if(toMin(v.end) <= toMin(v.start)){ toast("終了時刻は開始より後にしてください"); return; }
       S.shifts.push({id: uid(), staffId, date, ...v}); save(); toast("シフトを登録しました"); render();
     } });
 };
@@ -1489,9 +1519,8 @@ window.editShift = function(id){
   const s = S.shifts.find(x => x.id === id); if(!s) return;
   const fs = shiftFields();
   window._delShift = () => { closeModal(); ask("このシフトを削除しますか?", () => { S.shifts = S.shifts.filter(x => x.id !== id); save(); toast("削除しました"); render(); }); };
-  openForm({ title: `${staffName(s.staffId)} ・ ${fmtDate(s.date)} のシフト`, fields: fs, data: s,
+  openForm({ title: `${staffName(s.staffId)} ・ ${fmtDate(s.date)} のシフト`, fields: fs, data: s, validate: shiftValidate,
     onsave: v => {
-      if(toMin(v.end) <= toMin(v.start)){ toast("終了時刻は開始より後にしてください"); return; }
       Object.assign(s, v); save(); toast("更新しました"); render();
     } });
   document.querySelector(".m-foot").insertAdjacentHTML("afterbegin", `<button type="button" class="btn danger" style="margin-right:auto" onclick="_delShift()">削除</button>`);
@@ -1576,11 +1605,12 @@ function productivityHtml(m){
 window.editAdj = function(staffId){
   const key = staffId + "_" + V.payMonth;
   const adj = S.payAdj[key] || {};
-  openForm({ title: `${staffName(staffId)} ・ ${fmtMonth(V.payMonth)}の調整`, data: adj,
+  /* paidは真偽値で保存されているため、選択肢の値("1"/"")に変換してから渡す */
+  openForm({ title: `${staffName(staffId)} ・ ${fmtMonth(V.payMonth)}の調整`, data: {...adj, paid: adj.paid ? "1" : ""},
     fields: [
       {key:"allow", label:"手当(交通費・役職手当など/円)", type:"number", value:0, min:0},
       {key:"deduct", label:"控除(社会保険・源泉徴収など/円)", type:"number", value:0, min:0},
-      {key:"paid", label:"支払状況", type:"select", options:[["","未払"],["1","支払済"]], value: adj.paid ? "1" : ""},
+      {key:"paid", label:"支払状況", type:"select", options:[["","未払"],["1","支払済"]]},
       {key:"memo", label:"メモ", type:"text"}
     ],
     onsave: v => {
@@ -1818,17 +1848,19 @@ VIEWS.customers = function(){
     <div class="card"><div id="custlist"></div></div>`;
   renderCustList();
 };
-window.tagFilter = t => { V.custQ = t; render(); };
+/* タグ名に記号(クォート等)が含まれても壊れないよう、onclickへはタグ文字列でなく番号を渡す */
+let _tagList = [];
+window.tagFilter = i => { V.custQ = i === -1 ? "" : (_tagList[i] || ""); render(); };
 const custTags = c => (c.tags || "").split(",").map(s => s.trim()).filter(Boolean);
 function renderCustList(){
   const q = V.custQ.trim().toLowerCase();
   const list = S.customers.filter(c => !q || [c.name, c.kana, c.phone, c.tags].some(v => (v || "").toLowerCase().includes(q)))
-    .sort((a,b) => (b.visits.at(-1)?.date || "").localeCompare(a.visits.at(-1)?.date || ""));
+    .sort((a,b) => ((b.visits || []).at(-1)?.date || "").localeCompare(((a.visits || []).at(-1)?.date || "")));
   const elx = $("custlist"); if(!elx) return;
-  const allTags = [...new Set(S.customers.flatMap(custTags))];
-  const tagBar = allTags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-    ${allTags.map(t => `<button class="chip ${V.custQ === t ? "info" : "mut"}" style="cursor:pointer;border:0;font-family:inherit" onclick="tagFilter('${esc(t)}')">${esc(t)}</button>`).join("")}
-    ${V.custQ ? `<button class="chip mut" style="cursor:pointer;border:0;font-family:inherit" onclick="tagFilter('')">× 絞り込み解除</button>` : ""}
+  _tagList = [...new Set(S.customers.flatMap(custTags))];
+  const tagBar = _tagList.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+    ${_tagList.map((t, i) => `<button class="chip ${V.custQ === t ? "info" : "mut"}" style="cursor:pointer;border:0;font-family:inherit" onclick="tagFilter(${i})">${esc(t)}</button>`).join("")}
+    ${V.custQ ? `<button class="chip mut" style="cursor:pointer;border:0;font-family:inherit" onclick="tagFilter(-1)">× 絞り込み解除</button>` : ""}
   </div>` : "";
   elx.innerHTML = tagBar + (list.length ? `<div class="twrap"><table>
     <tr><th>名前</th><th>電話</th><th class="num">来店回数</th><th>最終来店</th><th>メモ</th></tr>
@@ -1944,9 +1976,11 @@ function renderApptWeek(){
   const days = Array.from({length:7}, (_,i) => addDays(V.apptWeek, i));
   const tday = todayStr();
   const head = days.map(d => `<th${d === tday ? ' class="today-col"' : ""} style="min-width:96px;text-align:center">${fmtDate(d)}</th>`).join("");
+  /* 削除済みスタッフ担当の予約も消えないよう「担当未定」の行にまとめる */
+  const sidOf = a => S.staff.some(s => s.id === a.staffId) ? a.staffId : "";
   const rows = [...S.staff.map(st => [st.id, st.name]), ["", "担当未定"]].map(([sid, name]) => {
     const cells = days.map(d => {
-      const list = S.appts.filter(a => a.date === d && (a.staffId || "") === sid).sort((a,b) => a.time.localeCompare(b.time));
+      const list = S.appts.filter(a => a.date === d && sidOf(a) === sid).sort((a,b) => a.time.localeCompare(b.time));
       return `<td${d === tday ? ' class="today-col"' : ""} style="vertical-align:top;text-align:center">${list.map(a => {
         const st2 = a.status === "done" ? "background:var(--good-chip);color:var(--good)"
           : a.status === "cancel" ? "background:var(--surface2);color:var(--muted);text-decoration:line-through" : "";
@@ -1982,6 +2016,7 @@ VIEWS.appts = function(){
           <td><span class="chip ${cls}">${lbl}</span></td>
           <td style="white-space:nowrap">
             ${a.status === "open" ? `<button class="btn sm pri" onclick="checkinAppt('${a.id}')">来店処理</button><button class="btn sm ghost" onclick="copyRemind('${a.id}')" title="リマインド定型文をコピー">文コピー</button><button class="btn sm ghost" onclick="cancelAppt('${a.id}')">キャンセル</button>` : ""}
+            ${a.status === "cancel" ? `<button class="btn sm" onclick="reopenAppt('${a.id}')">予約に戻す</button>` : ""}
             <button class="btn sm ghost" onclick="editAppt('${a.id}')">編集</button>
             <button class="btn sm ghost" onclick="delAppt('${a.id}')">削除</button>
           </td>
@@ -2002,15 +2037,6 @@ function apptFields(){
     {key:"memo", label:"メモ", type:"text", half:true}
   ];
 }
-/* 会計フォームのお釣り計算(預かり金 − 明細合計)。表示のみで保存はされない */
-window.calcChange = function(){
-  const el = $("ff-tendered-note"); if(!el) return;
-  const total = num(($("ff-amount") || {}).value) + num(($("ff-amount2") || {}).value) + num(($("ff-amount3") || {}).value);
-  const tender = num(($("ff-tendered") || {}).value);
-  el.innerHTML = tender > 0
-    ? `会計 ${yen(total)} → お釣り <strong style="font-size:16px;color:${tender >= total ? "var(--good)" : "var(--crit)"}">${tender >= total ? yen(tender - total) : "不足 " + yen(total - tender)}</strong>`
-    : "";
-};
 /* ---- 予約→顧客カルテの自動反映 ----
    同名カルテが1件なら自動紐づけ。同姓同名が複数いる場合は電話番号の一致で自動特定し、
    特定できなければ誕生日・電話・最終来店日つきの選択画面でどのお客様か選ぶ(別人として新規作成も可) */
@@ -2079,7 +2105,12 @@ window.delAppt = function(id){
 };
 window.cancelAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
-  a.status = "cancel"; save(); toast("キャンセルにしました"); render();
+  a.status = "cancel"; save(); toast("キャンセルにしました(「予約に戻す」で元に戻せます)"); render();
+};
+/* 間違えてキャンセルした予約を予約中に戻す */
+window.reopenAppt = function(id){
+  const a = S.appts.find(x => x.id === id); if(!a) return;
+  a.status = "open"; save(); toast("予約中に戻しました"); render();
 };
 /* ---- 明細型レジ(来店処理) ----
    予約のメニューを1行目に入れた状態で開き、当日追加のメニューは料金表ボタンのタップや
@@ -2212,12 +2243,22 @@ function renderRegister(){
       <div class="f-row"><label for="reg-nd">次回予約日(任意)</label><input id="reg-nd" type="date" value="${esc(REG.nextDate || "")}"></div>
       <div class="f-row"><label for="reg-nt">次回時刻</label><input id="reg-nt" type="time" value="${esc(REG.nextTime || "")}"></div>
     </div>
-    <div class="m-foot"><button class="btn" onclick="closeModal()">キャンセル</button><button class="btn pri" onclick="regConfirm()">会計を確定</button></div>
+    <div class="m-foot"><button class="btn" onclick="regAskClose()">キャンセル</button><button class="btn pri" onclick="regConfirm()">会計を確定</button></div>
   `);
   const box = document.querySelector("#modal-root .m-box");
   if(box) box.classList.add("wide");
+  _dismiss = regAskClose; // 背景クリック・Escでいきなり閉じず、確認を挟む
   regSums();
 }
+/* 会計の中断確認。誤タップで明細が消えるのを防ぐ(「入力へ戻る」で元の内容に復帰) */
+window.regAskClose = function(){
+  regCapture();
+  if(!REG || (REG.lines.length <= 1 && !(REG.lines[0] && (REG.lines[0].name || "").trim()))){ closeModal(); return; }
+  openModal(`<h3>会計を中断しますか?</h3><p style="font-size:13.5px">入力した明細は保存されません。</p>
+    <div class="m-foot"><button class="btn" onclick="renderRegister()">入力へ戻る</button>
+    <button class="btn danger" onclick="closeModal()">中断する</button></div>`);
+  _dismiss = renderRegister; // 確認画面で背景クリック・Escした場合も入力へ戻す
+};
 window.regConfirm = function(){
   regCapture();
   const a = S.appts.find(x => x.id === REG.apptId); if(!a) return;
@@ -2571,16 +2612,16 @@ function menuFields(){
 }
 window.addMenu = function(){
   openForm({ title:"メニューを追加", fields: menuFields(),
+    validate: v => S.menus.some(mn => mn.name === v.name) ? "同じ名前のメニューがすでにあります" : "",
     onsave: v => {
-      if(S.menus.some(mn => mn.name === v.name)){ toast("同じ名前のメニューがすでにあります"); return; }
       S.menus.push({id: uid(), ...v}); save(); toast("追加しました"); render();
     } });
 };
 window.editMenu = function(id){
   const mn = S.menus.find(x => x.id === id); if(!mn) return;
   openForm({ title:"メニューを編集", fields: menuFields(), data: mn,
+    validate: v => S.menus.some(x => x.id !== id && x.name === v.name) ? "同じ名前のメニューがすでにあります" : "",
     onsave: v => {
-      if(S.menus.some(x => x.id !== id && x.name === v.name)){ toast("同じ名前のメニューがすでにあります"); return; }
       Object.assign(mn, v); save(); toast("更新しました"); render();
     } });
 };
@@ -2606,8 +2647,8 @@ VIEWS.settings = function(){
     </div>
     <div class="card"><h2>月別の売上目標 <span class="h2-sub">繁忙月・閑散月で目標を変えたいときに</span></h2>
       <div class="f-2col" style="max-width:420px">
-        <div class="f-row"><label for="set-tm">対象月</label><input id="set-tm" type="month" value="${thisMonth()}"></div>
-        <div class="f-row"><label for="set-tma">その月の目標(円)</label><input id="set-tma" type="number" inputmode="numeric" min="0" step="10000" placeholder="空欄で共通目標に戻す"></div>
+        <div class="f-row"><label for="set-tm">対象月</label><input id="set-tm" type="month" value="${thisMonth()}" onchange="monthTargetPick()"></div>
+        <div class="f-row"><label for="set-tma">その月の目標(円)</label><input id="set-tma" type="number" inputmode="numeric" min="0" step="10000" value="${num((S.settings.targets || {})[thisMonth()]) > 0 ? num(S.settings.targets[thisMonth()]) : ""}" placeholder="空欄で共通目標に戻す"></div>
       </div>
       <button class="btn" onclick="saveMonthTarget()">月別目標を保存</button>
       ${Object.entries(S.settings.targets || {}).filter(([,v]) => num(v) > 0).sort((a,b) => b[0].localeCompare(a[0])).map(([mm, v]) =>
@@ -2708,6 +2749,13 @@ window.delClosedDate = function(d){
   S.settings.closedDates = (S.settings.closedDates || []).filter(x => x !== d);
   save(); toast("削除しました"); render();
 };
+/* 対象月を変えたら、その月の設定済み目標を金額欄へ反映(編集しやすく) */
+window.monthTargetPick = function(){
+  const mm = $("set-tm").value, el = $("set-tma");
+  if(!el) return;
+  const v = num((S.settings.targets || {})[mm]);
+  el.value = v > 0 ? v : "";
+};
 window.saveMonthTarget = function(){
   const mm = $("set-tm").value;
   if(!mm){ toast("対象月を選択してください"); return; }
@@ -2733,11 +2781,12 @@ window.importBackup = function(input){
       const d = JSON.parse(rd.result);
       if(!d || typeof d !== "object" || !("tx" in d)) throw 0;
       ask("現在のデータをバックアップの内容で置き換えますか?", () => {
-        S = Object.assign(structuredClone(DEFAULTS), d); save(); toast("読み込みました"); render();
+        S = normalizeState(d); save(); toast("読み込みました"); render();
       });
     }catch(e){ toast("読み込めませんでした。バックアップファイルを確認してください"); }
   };
   rd.readAsText(file);
+  input.value = ""; // 同じファイルをもう一度選び直せるようにする
 };
 window.wipeAll = function(){
   ask("すべてのデータを完全に削除します。よろしいですか?(元に戻せません)", () => {
@@ -2747,6 +2796,9 @@ window.wipeAll = function(){
   });
 };
 window.seedSample = function(){
+  if(S.staff.some(s => s.name === "佐藤 美咲") && S.customers.some(c => c.name === "山本 花子")){
+    toast("サンプルデータはすでに投入済みです(二重登録を防ぐためスキップしました)"); return;
+  }
   const m = thisMonth(), pm = addMonths(m, -1), t = todayStr();
   const s1 = uid(), s2 = uid(), c1 = uid(), c2 = uid(), i1 = uid(), i2 = uid();
   if(!num(S.settings.target)) S.settings.target = 800000;
