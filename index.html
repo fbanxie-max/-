@@ -626,7 +626,7 @@ function applyRecurring(){
   return n;
 }
 /* スタッフ別売上・メニュー別構成・支出内訳の3カード(ダッシュボードと月次レポートで共用) */
-function breakdownCardsHtml(m){
+function breakdownCardsHtml(m, full = true){ // full=false: 顧客分析(リピート率・指名率など)を出さない(ダッシュボード用)
   const s = monthSummary(m);
   const staffE = staffSalesEntries(m);
   const menuE = topN(groupSum(txInMonth(m).filter(t => t.type === "income"), t => t.category || "未分類"), 7);
@@ -635,7 +635,9 @@ function breakdownCardsHtml(m){
   const seen = vs.nw + vs.rep;
   const as = apptStats(m);
   const foot = s.inc > 0
-    ? `<div class="hb-foot">店販比率 <strong>${Math.round(s.retail / s.inc * 100)}%</strong> ・ リピート率 <strong>${seen ? Math.round(vs.rep / seen * 100) + "%" : "—(カルテ記録なし)"}</strong>${seen ? `(カルテ 新規${vs.nw}・再来${vs.rep})` : ""}<br>指名率 <strong>${as.withStaff ? Math.round(as.nom / as.withStaff * 100) + "%" : "—"}</strong> ・ 次回予約率 <strong>${as.done ? Math.round(as.next / as.done * 100) + "%" : "—"}</strong>(来店処理した予約${as.done}件から算出)</div>`
+    ? (full
+      ? `<div class="hb-foot">店販比率 <strong>${Math.round(s.retail / s.inc * 100)}%</strong> ・ リピート率 <strong>${seen ? Math.round(vs.rep / seen * 100) + "%" : "—(カルテ記録なし)"}</strong>${seen ? `(カルテ 新規${vs.nw}・再来${vs.rep})` : ""}<br>指名率 <strong>${as.withStaff ? Math.round(as.nom / as.withStaff * 100) + "%" : "—"}</strong> ・ 次回予約率 <strong>${as.done ? Math.round(as.next / as.done * 100) + "%" : "—"}</strong>(来店処理した予約${as.done}件から算出)</div>`
+      : `<div class="hb-foot">店販比率 <strong>${Math.round(s.retail / s.inc * 100)}%</strong></div>`)
     : "";
   return `<div class="grid2" style="margin-bottom:16px">
     <div class="card"><h2>スタッフ別売上 <span class="h2-sub">${fmtMonth(m)}</span></h2>
@@ -824,7 +826,9 @@ VIEWS.dash = function(){
   const todayInc = S.tx.filter(t => t.date === tday && t.type === "income");
   const incToday = todayInc.reduce((a,t) => a + num(t.amount), 0);
   const custToday = salesCount(todayInc);
-  const vs = visitStats(m);
+  const ydayInc = S.tx.filter(t => t.type === "income" && t.date === addDays(tday, -1) && !t.bulk);
+  const incYday = ydayInc.reduce((a,t) => a + num(t.amount), 0);
+  const cntYday = salesCount(ydayInc);
   /* alerts */
   const low = S.inv.filter(i => num(i.qty) <= num(i.minQty) && num(i.minQty) > 0);
   const pendingOrders = S.orders.filter(o => o.status !== "done");
@@ -833,8 +837,6 @@ VIEWS.dash = function(){
   const alerts = [];
   low.forEach(i => alerts.push(`<div class="alertline"><span class="chip crit">在庫不足</span>${esc(i.name)}(残り ${i.qty}${esc(i.unit || "")} / 最低 ${i.minQty})</div>`));
   pendingOrders.filter(o => o.status === "draft").forEach(o => alerts.push(`<div class="alertline"><span class="chip warn">未発注</span>${esc(o.item)}(${esc(o.supplier)})</div>`));
-  const lost = lostCustomers(60);
-  if(lost.length) alerts.push(`<div class="alertline"><span class="chip info">フォロー</span>${lost.length}名が60日以上未来店 <button class="btn sm" onclick="go('follow')">確認 ›</button></div>`);
   /* うっかり防止: 昨日の締め忘れ・バックアップの放置 */
   const ymd = addDays(tday, -1);
   if(S.tx.some(t => t.type === "income" && t.date === ymd && !t.bulk) && !(S.closings[ymd] && S.closings[ymd].closed))
@@ -854,10 +856,24 @@ VIEWS.dash = function(){
     </div>` : "") +
     `<div class="tiles">
       <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件${apptsToday.length ? ` ・ 予約あと${apptsToday.length}件` : ""}</div></div>
+      <div class="tile"><div class="t-label">昨日の売上</div><div class="t-val">${yen(incYday)}</div><div class="t-note">${cntYday}件</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
-      <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
-      <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
+    </div>
+    <div class="card"><h2>日別売上 <span class="h2-sub">直近7日 ・ 行をタップでその日のレジ締めへ</span></h2>
+      <div class="twrap"><table>
+        <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th>レジ締め</th></tr>
+        ${Array.from({length: 7}, (_, i) => addDays(tday, -i)).map(d => {
+          const list = S.tx.filter(t => t.type === "income" && t.date === d && !t.bulk);
+          const v = list.reduce((a, t) => a + num(t.amount), 0);
+          const closed = S.closings[d] && S.closings[d].closed;
+          return `<tr class="rowlink" onclick="openDayClose('${d}')"${d === tday ? ' style="background:var(--accent-soft)"' : ""}>
+            <td style="white-space:nowrap;font-weight:600">${fmtDate(d)}${d === tday ? ' <span class="chip info">今日</span>' : ""}</td>
+            <td class="num" style="font-weight:700">${yen(v)}</td>
+            <td class="num">${salesCount(list)}件</td>
+            <td>${closed ? '<span class="chip good">締め済</span>' : (v > 0 ? '<span class="chip warn">未締め</span>' : '<span style="color:var(--muted);font-size:12px">—</span>')}</td>
+          </tr>`; }).join("")}
+      </table></div>
     </div>
     <div class="grid2" style="margin-bottom:16px">
       <div class="card"><h2>今日の予約 <span class="h2-sub">${apptsToday.length}件</span></h2>
@@ -879,7 +895,7 @@ VIEWS.dash = function(){
     <div class="card"><h2>月別収支 <span class="h2-sub">直近${V.chartN}ヶ月</span><span style="margin-left:auto;display:inline-flex;gap:4px"><button class="btn sm${V.chartN === 6 ? " pri" : ""}" onclick="setChartN(6)">6ヶ月</button><button class="btn sm${V.chartN === 12 ? " pri" : ""}" onclick="setChartN(12)">12ヶ月</button></span></h2>
       ${hasData ? monthlyChartHtml(null, V.chartN) : `<div class="empty">まだ収支データがありません。「+ 売上を記録」から始めるか、設定画面でサンプルデータを投入してお試しください。</div>`}
     </div>` +
-    breakdownCardsHtml(m);
+    breakdownCardsHtml(m, false);
   attachChartTips();
 };
 function lastMonths(n, base){
