@@ -483,7 +483,15 @@ function monthSummary(m){
   const mat = list.filter(t => t.type === "expense" && t.category === "材料費").reduce((a,t) => a + num(t.amount), 0);
   const retail = incList.filter(t => t.category === "店販(商品売上)").reduce((a,t) => a + num(t.amount), 0);
   const count = salesCount(incList);
-  return { inc, exp, profit: inc - exp, mat, retail, count, avg: count ? Math.round(inc / count) : 0 };
+  /* 利益は給料反映後: 売上 − 経費(人件費除く) − 給料(スタッフ給与の自動計算)。
+     「支出に計上」済みの給与(人件費カテゴリ)は二重に引かないよう経費側から除外する */
+  const expOther = list.filter(t => t.type === "expense" && t.category !== "人件費").reduce((a,t) => a + num(t.amount), 0);
+  const pay = payrollTotalFor(m);
+  return { inc, exp, pay, profit: inc - expOther - pay, mat, retail, count, avg: count ? Math.round(inc / count) : 0 };
+}
+/* その月分の給与(支給額)の合計。在籍スタッフのみ。基本給は自動計算なので毎月何もしなくても反映される */
+function payrollTotalFor(m){
+  return S.staff.filter(st => staffActiveIn(st, m)).reduce((a, st) => a + calcPay(st, m).total, 0);
 }
 /* 顧客カルテから当月来店客の新規/再来を判定(顧客単位。全来店のうち最古の日付が当月なら新規) */
 function visitStats(m){
@@ -665,13 +673,23 @@ function payDate(m){
   const pm = S.settings.payMonth === "next" ? addMonths(m, 1) : m;
   return pm + "-" + String(Math.min(paySalaryDay(), daysInMonth(pm))).padStart(2, "0");
 }
+/* その月に適用される給与条件(昇給などの改定履歴を考慮)。
+   st.hist = [{until:'YYYY-MM', payType, wage, commission}] は「その月まで有効だった旧条件」の記録 */
+function payParamsFor(st, m){
+  if(st.hist && st.hist.length){
+    const c = st.hist.filter(h => h.until && m <= h.until).sort((a, b) => a.until.localeCompare(b.until));
+    if(c.length) return c[0];
+  }
+  return st;
+}
 function calcPay(st, m){
   const adj = S.payAdj[st.id + "_" + m] || {};
+  const P = payParamsFor(st, m);
   const pp = payPeriod(m);
   const hours = S.shifts.filter(s => s.staffId === st.id && s.date >= pp.from && s.date <= pp.to).reduce((a,s) => a + shiftHours(s), 0);
-  const base = st.payType === "monthly" ? num(st.wage) : Math.round(hours * num(st.wage));
+  const base = P.payType === "monthly" ? num(P.wage) : Math.round(hours * num(P.wage));
   const sales = S.tx.filter(t => t.type === "income" && t.staffId === st.id && t.date >= pp.from && t.date <= pp.to).reduce((a,t) => a + num(t.amount), 0);
-  const comm = Math.round(sales * num(st.commission) / 100);
+  const comm = Math.round(sales * num(P.commission) / 100);
   const total = base + comm + num(adj.allow) - num(adj.deduct);
   return { hours, base, sales, comm, allow: num(adj.allow), deduct: num(adj.deduct), total, paid: !!adj.paid, booked: !!adj.booked, memo: adj.memo || "" };
 }
@@ -837,7 +855,7 @@ VIEWS.dash = function(){
     `<div class="tiles">
       <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件${apptsToday.length ? ` ・ 予約あと${apptsToday.length}件` : ""}</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
-      <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
       <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
       <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
     </div>
@@ -975,7 +993,7 @@ VIEWS.report = function(){
     `<div class="tiles">
       <div class="tile"><div class="t-label">売上</div><div class="t-val">${yen(s.inc)}</div><div class="t-note">${mom}${yoy}</div></div>
       <div class="tile"><div class="t-label">支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
-      <div class="tile"><div class="t-label">利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div></div>
+      <div class="tile"><div class="t-label">利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
       <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
       <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
     </div>` +
@@ -992,7 +1010,7 @@ function reportSummaryLines(m){
     `【月次レポート】${S.settings.name} ${fmtMonth(m)}`,
     `売上: ${yen(s.inc)}`,
     `支出: ${yen(s.exp)}(うち材料費 ${yen(s.mat)})`,
-    `利益: ${yen(s.profit)}`,
+    `利益(売上−経費−給料): ${yen(s.profit)}`,
     `来店: ${s.count}件 / 客単価 ${yen(s.avg)}`
   ];
 }
@@ -1082,7 +1100,7 @@ VIEWS.reports = function(){
     </div>
     <div class="card"><h2>月報一覧 <span class="h2-sub">直近12ヶ月</span></h2>
       <div class="twrap">${months.length ? `<table>
-        <tr><th>月</th><th class="num">売上</th><th class="num">支出</th><th class="num">利益</th><th class="num">客数</th><th class="num">客単価</th><th class="num">材料費(率)</th>${target > 0 ? '<th class="num">目標達成</th>' : ""}<th></th></tr>
+        <tr><th>月</th><th class="num">売上</th><th class="num">支出</th><th class="num">利益(給料込み)</th><th class="num">客数</th><th class="num">客単価</th><th class="num">材料費(率)</th>${target > 0 ? '<th class="num">目標達成</th>' : ""}<th></th></tr>
         ${months.map(mm => {
           const s = monthSummary(mm);
           return `<tr class="rowlink" onclick="openMonthReport('${mm}')"${mm === thisMonth() ? ' style="background:var(--accent-soft)"' : ""}>
@@ -1096,7 +1114,7 @@ VIEWS.reports = function(){
             ${target > 0 ? `<td class="num">${targetFor(mm) > 0 ? Math.round(s.inc / targetFor(mm) * 100) + "%" : "—"}</td>` : ""}
             <td><button class="btn sm ghost" onclick="event.stopPropagation();openMonthReport('${mm}')">月次レポート ›</button></td>
           </tr>`; }).join("")}</table>` : `<div class="empty">まだ記録がありません</div>`}</div>
-      <div class="hint">行をクリックするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。</div>
+      <div class="hint">行をクリックするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。利益は「売上 − 経費(人件費除く) − その月分の給料」で、スタッフの基本給・歩合は毎月自動で反映されます(給料管理で内訳を確認できます)。</div>
     </div>` +
     yoyCardHtml(m.slice(0, 4)) +
     trendCardsHtml();
@@ -1435,9 +1453,10 @@ VIEWS.payroll = function(){
   let sumTotal = 0;
   const rows = staffList.map(st => {
     const p = calcPay(st, m);
+    const P = payParamsFor(st, m);
     sumTotal += p.total;
     return `<tr>
-      <td style="font-weight:600;white-space:nowrap">${esc(st.name)}<div style="font-size:11px;color:var(--muted)">${st.payType === "monthly" ? "月給" : "時給 " + yen(st.wage)}${num(st.commission) ? " ・ 歩合" + st.commission + "%" : ""}</div></td>
+      <td style="font-weight:600;white-space:nowrap">${esc(st.name)}<div style="font-size:11px;color:var(--muted)">${P.payType === "monthly" ? "月給" : "時給 " + yen(P.wage)}${num(P.commission) ? " ・ 歩合" + P.commission + "%" : ""}</div></td>
       <td class="num">${p.hours.toFixed(1)}h</td>
       <td class="num">${yen(p.base)}</td>
       <td class="num" title="担当売上 ${yen(p.sales)}">${yen(p.comm)}</td>
@@ -1575,8 +1594,21 @@ window.addStaff = function(){
 };
 window.editStaff = function(id){
   const st = S.staff.find(x => x.id === id); if(!st) return;
-  openForm({ title:"スタッフを編集", fields: staffFields(), data: st,
-    onsave: v => { Object.assign(st, v); save(); toast("更新しました"); render(); } });
+  const fields = [...staffFields(),
+    {key:"applyM", label:"給与改定の適用開始月(昇給・歩合変更時のみ。指定するとそれ以前の月は旧額のまま計算。空欄なら過去の月もすべて新しい内容で再計算)", type:"month"}];
+  openForm({ title:"スタッフを編集", fields, data: st,
+    onsave: v => {
+      const applyM = v.applyM; delete v.applyM;
+      const changed = num(v.wage) !== num(st.wage) || num(v.commission) !== num(st.commission) || v.payType !== st.payType;
+      let msg = "更新しました";
+      if(changed && applyM){
+        /* 旧条件を履歴に残す: applyMの前月まで有効。過去の給料管理・明細・利益は旧額のまま */
+        st.hist = st.hist || [];
+        st.hist.push({ until: addMonths(applyM, -1), payType: st.payType, wage: st.wage, commission: st.commission });
+        msg = `更新しました。${fmtMonth(applyM)}分から新しい給与で計算し、それ以前は旧額のままです`;
+      }
+      Object.assign(st, v); save(); toast(msg); render();
+    } });
 };
 window.delStaff = function(id){
   ask("このスタッフを削除しますか?(シフト・給与の記録も表示されなくなります)", () => {
@@ -2387,6 +2419,7 @@ VIEWS.payslip = function(){
   const pp = payPeriod(m);
   const cards = S.staff.filter(st => staffActiveIn(st, m)).map(st => {
     const p = calcPay(st, m);
+    const P = payParamsFor(st, m);
     return `<div class="card" style="max-width:560px">
       <h2>給与明細 <span class="h2-sub">${fmtMonth(m)}分</span></h2>
       <div style="font-weight:700;font-size:15px;margin-bottom:8px">${esc(st.name)} 様${st.role ? `(${esc(st.role)})` : ""} ${p.paid ? '<span class="chip good">支払済</span>' : '<span class="chip warn">未払</span>'}</div>
@@ -2394,8 +2427,8 @@ VIEWS.payslip = function(){
         <tr><td style="color:var(--muted);width:200px">対象期間(${payCloseLabel()}締め)</td><td class="num">${fmtDate(pp.from)} 〜 ${fmtDate(pp.to)}</td></tr>
         <tr><td style="color:var(--muted)">支払日(${payDayLabel()}払い)</td><td class="num">${fmtDate(payDate(m))}</td></tr>
         <tr><td style="color:var(--muted)">勤務時間</td><td class="num">${p.hours.toFixed(1)}h</td></tr>
-        <tr><td style="color:var(--muted)">基本給(${st.payType === "monthly" ? "月給" : "時給 " + yen(st.wage)})</td><td class="num">${yen(p.base)}</td></tr>
-        <tr><td style="color:var(--muted)">歩合(担当売上 ${yen(p.sales)} × ${num(st.commission)}%)</td><td class="num">${yen(p.comm)}</td></tr>
+        <tr><td style="color:var(--muted)">基本給(${P.payType === "monthly" ? "月給" : "時給 " + yen(P.wage)})</td><td class="num">${yen(p.base)}</td></tr>
+        <tr><td style="color:var(--muted)">歩合(担当売上 ${yen(p.sales)} × ${num(P.commission)}%)</td><td class="num">${yen(p.comm)}</td></tr>
         <tr><td style="color:var(--muted)">手当</td><td class="num">${yen(p.allow)}</td></tr>
         <tr><td style="color:var(--muted)">控除</td><td class="num">${p.deduct ? "−" + yen(p.deduct).slice(1) : yen(0)}</td></tr>
         <tr class="total"><td>差引支給額</td><td class="num">${yen(p.total)}</td></tr>
