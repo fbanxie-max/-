@@ -124,6 +124,10 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 tr.total td{font-weight:700;border-top:2px solid var(--line2);background:var(--surface2)}
 tr.rowlink{cursor:pointer} tr.rowlink:hover td{background:var(--surface2)}
 tr.lowstock td{background:var(--crit-chip)}
+/* 給料管理: タップで直接編集できる金額セル */
+td.payedit{cursor:pointer}
+td.payedit:hover{background:var(--surface2)}
+td.payedit .pe-v{border-bottom:1px dashed var(--line2);padding-bottom:1px}
 /* ---- chips ---- */
 .chip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
 .chip.good{background:var(--good-chip);color:var(--good)}
@@ -1540,10 +1544,10 @@ VIEWS.payroll = function(){
     return `<tr>
       <td style="font-weight:600;white-space:nowrap">${esc(st.name)}<div style="font-size:11px;color:var(--muted)">${P.payType === "monthly" ? "月給" : "時給 " + yen(P.wage)}${num(P.commission) ? " ・ 歩合" + P.commission + "%" : ""}</div></td>
       <td class="num">${p.hours.toFixed(1)}h</td>
-      <td class="num">${yen(p.base)}</td>
-      <td class="num" title="担当売上 ${yen(p.sales)}">${yen(p.comm)}</td>
-      <td class="num">${yen(p.allow)}</td>
-      <td class="num">${p.deduct ? "−" + yen(p.deduct).slice(1) : yen(0)}</td>
+      <td class="num payedit" onclick="editWageCell('${st.id}')" title="タップで${P.payType === "monthly" ? "月給" : "時給"}を変更"><span class="pe-v">${yen(p.base)}</span></td>
+      <td class="num payedit" onclick="editCommCell('${st.id}')" title="担当売上 ${yen(p.sales)} ・ タップで歩合率を変更"><span class="pe-v">${yen(p.comm)}</span></td>
+      <td class="num payedit" onclick="editAdj('${st.id}')" title="タップで手当・控除を調整"><span class="pe-v">${yen(p.allow)}</span></td>
+      <td class="num payedit" onclick="editAdj('${st.id}')" title="タップで手当・控除を調整"><span class="pe-v">${p.deduct ? "−" + yen(p.deduct).slice(1) : yen(0)}</span></td>
       <td class="num" style="font-weight:700">${yen(p.total)}</td>
       <td>${p.paid ? '<span class="chip good">支払済</span>' : '<span class="chip warn">未払</span>'}</td>
       <td style="white-space:nowrap">
@@ -1562,7 +1566,7 @@ VIEWS.payroll = function(){
           ${rows}
           <tr class="total"><td>合計</td><td></td><td></td><td></td><td></td><td></td><td class="num">${yen(sumTotal)}</td><td></td><td></td></tr>
         </table></div>
-        <div class="hint">勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。締日・支払日は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</div></div>`
+        <div class="hint"><strong>基本給・歩合・手当・控除の金額はタップするとその場で変更できます</strong>(表示中の月分から新しい金額で計算し、それより前の月は自動で今のまま。昇給の履歴も自動で残ります)。勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。締日・支払日は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</div></div>`
         + payProfitHtml(m, sumTotal)
         + productivityHtml(m)
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
@@ -1604,6 +1608,48 @@ function productivityHtml(m){
     <div class="hint">労働分配率 = 支給額 ÷ 担当売上。美容室では40〜60%が一般的な目安といわれます。歩合率や価格設定の見直しの参考に。</div>
   </div>`;
 }
+/* ---- 給料管理のセル直接編集 ----
+   表示中の月(m)から新しい給与条件で計算し、それより前の月は旧条件を履歴(hist)に自動で残す。
+   スタッフ編集の「適用開始月」を使わなくても、見ている月の金額をタップで変えるだけで昇給できる */
+function applyPayChangeFrom(st, m, patch){
+  const pm = addMonths(m, -1);
+  const before = payParamsFor(st, pm);
+  /* m以降まで有効と記録された旧条件は前月で打ち切る(今回の変更が優先) */
+  st.hist = (st.hist || []).map(h => h.until >= m ? {...h, until: pm} : h);
+  const seen = {};
+  st.hist = st.hist.filter(h => seen[h.until] ? false : (seen[h.until] = true));
+  /* 前月までは変更前の条件のまま計算されるよう履歴に残す */
+  if(!st.hist.some(h => h.until === pm))
+    st.hist.push({ until: pm, payType: before.payType, wage: before.wage, commission: before.commission });
+  Object.assign(st, patch);
+}
+window.editWageCell = function(staffId){
+  const st = S.staff.find(s => s.id === staffId); if(!st) return;
+  const m = V.payMonth, P = payParamsFor(st, m);
+  const isMo = P.payType === "monthly";
+  openForm({ title: `${st.name} ・ ${isMo ? "月給" : "時給"}の変更`, saveLabel: `${fmtMonth(m)}分から変更`,
+    fields: [
+      {key:"wage", label: `${isMo ? "月給" : "時給"}(円)${isMo ? "" : " ・ シフトの勤務時間×時給で基本給を計算します"}`, type:"number", value: num(P.wage), required:true, min:0}
+    ],
+    onsave: v => {
+      if(num(v.wage) === num(P.wage)){ toast("金額は変わっていません"); return; }
+      applyPayChangeFrom(st, m, { payType: P.payType, wage: num(v.wage) });
+      save(); toast(`${fmtMonth(m)}分から${isMo ? "月給" : "時給"} ${yen(v.wage)} で計算します(それより前の月は今のままです)`); render();
+    } });
+};
+window.editCommCell = function(staffId){
+  const st = S.staff.find(s => s.id === staffId); if(!st) return;
+  const m = V.payMonth, P = payParamsFor(st, m);
+  openForm({ title: `${st.name} ・ 歩合率の変更`, saveLabel: `${fmtMonth(m)}分から変更`,
+    fields: [
+      {key:"commission", label:"歩合率(担当売上に対する%)", type:"number", value: num(P.commission), min:0, step:"0.5"}
+    ],
+    onsave: v => {
+      if(num(v.commission) === num(P.commission)){ toast("歩合率は変わっていません"); return; }
+      applyPayChangeFrom(st, m, { commission: num(v.commission) });
+      save(); toast(`${fmtMonth(m)}分から歩合 ${num(v.commission)}% で計算します(それより前の月は今のままです)`); render();
+    } });
+};
 window.editAdj = function(staffId){
   const key = staffId + "_" + V.payMonth;
   const adj = S.payAdj[key] || {};
