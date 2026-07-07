@@ -1329,7 +1329,7 @@ VIEWS.money = function(){
   const profit = monthSummary(m).profit;
   $("main").innerHTML =
     pageHead("収支管理", "日々の売上と経費を記録します",
-      `<button class="btn pri" onclick="addTx('income')">+ 収入</button><button class="btn" onclick="addTx('expense')">+ 支出</button><button class="btn" onclick="exportTxCsv()">CSV出力</button>`) +
+      `<button class="btn pri" onclick="addTx('income')">+ 収入</button><button class="btn" onclick="addTx('expense')">+ 支出</button><button class="btn" onclick="openExpBulk()">経費のまとめ入力</button><button class="btn" onclick="exportTxCsv()">CSV出力</button>`) +
     `<div class="card">
       <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
         ${monthNav(m, "moneyNav")}
@@ -2860,6 +2860,56 @@ VIEWS.payslip = function(){
     pageHead("給与明細", `${esc(S.settings.name)} ・ ${fmtMonth(m)}分(${fmtDate(pp.from)}〜${fmtDate(pp.to)})・ 支払日 ${fmtDate(payDate(m))}`,
       `<button class="btn" onclick="go('payroll')">‹ 給料管理へ</button>${monthNav(m, "payNav")}<button class="btn" onclick="window.print()">印刷 / PDF保存</button>`) +
     (cards || `<div class="card"><div class="empty">${S.staff.length ? `${fmtMonth(m)}分の給与対象スタッフがいません(入社前・退社後の月です)` : "スタッフが未登録です"}</div></div>`);
+};
+/* ================= expense bulk entry (経費まとめ入力・ナビ非掲載) =================
+   領収書1枚ずつではなく、月ごと×カテゴリごとの合計で経費を入力する。
+   利益・納税予想は月合計しか使わないため、これで精度は落ちない(領収書の現物は保存が必要)。
+   expBulkフラグつきで保存し、同じ月・カテゴリは上書き(二重計上しない) */
+window.openExpBulk = function(){ V.expBulkMonth = V.moneyMonth || thisMonth(); go("expbulk"); };
+window.expBulkNav = d => { V.expBulkMonth = addMonths(V.expBulkMonth, d); render(); };
+window.saveExpBulk = function(){
+  const m = V.expBulkMonth;
+  let changed = 0;
+  EXPENSE_CATS.forEach((cat, i) => {
+    const el = $("eb-" + i); if(!el) return;
+    const val = Math.max(0, num(el.value));
+    const existing = S.tx.filter(t => t.expBulk && t.type === "expense" && t.category === cat && t.date && t.date.startsWith(m));
+    const existAmt = existing.reduce((a, t) => a + num(t.amount), 0);
+    if(val === existAmt) return;
+    S.tx = S.tx.filter(t => !(t.expBulk && t.type === "expense" && t.category === cat && t.date && t.date.startsWith(m)));
+    if(val > 0) S.tx.push({id: uid(), expBulk: true, type: "expense", date: m + "-15", category: cat, amount: val, memo: "経費まとめ入力", staffId: ""});
+    changed++;
+  });
+  save(); toast(changed ? `${fmtMonth(m)}の経費まとめを保存しました(同じ月は上書き)` : "変更はありませんでした"); render();
+};
+VIEWS.expbulk = function(){
+  const m = V.expBulkMonth;
+  const list = txInMonth(m).filter(t => t.type === "expense");
+  const rows = EXPENSE_CATS.map((cat, i) => {
+    const bulkAmt = list.filter(t => t.expBulk && t.category === cat).reduce((a, t) => a + num(t.amount), 0);
+    const normAmt = list.filter(t => !t.expBulk && !t.ownerDraw && t.category === cat).reduce((a, t) => a + num(t.amount), 0);
+    return `<tr>
+      <td style="font-weight:600;white-space:nowrap">${esc(cat)}</td>
+      <td class="num"><input id="eb-${i}" type="number" inputmode="numeric" min="0" value="${bulkAmt || ""}" style="max-width:130px;text-align:right" aria-label="${esc(cat)}の月合計"></td>
+      <td class="num" style="color:var(--muted);font-size:12px;white-space:nowrap">${normAmt ? yen(normAmt) : "—"}</td>
+    </tr>`;
+  }).join("");
+  const totBulk = list.filter(t => t.expBulk).reduce((a, t) => a + num(t.amount), 0);
+  const totNorm = list.filter(t => !t.expBulk && !t.ownerDraw).reduce((a, t) => a + num(t.amount), 0);
+  $("main").innerHTML =
+    pageHead("経費のまとめ入力", "領収書1枚ずつではなく、月ごとの合計をカテゴリ別に入れるだけでOKです",
+      `<button class="btn" onclick="go('money')">‹ 収支管理へ</button>${monthNav(m, "expBulkNav")}<button class="btn pri" onclick="saveExpBulk()">まとめて保存</button>`) +
+    `<div class="card"><h2>${fmtMonth(m)}の経費 <span class="h2-sub">使うカテゴリだけでOK。同じ月は上書き</span></h2>
+      <div class="twrap"><table style="max-width:640px">
+        <tr><th>カテゴリ</th><th class="num">月の合計(円)</th><th class="num">1件ずつ入力済み(参考)</th></tr>
+        ${rows}
+        <tr class="total"><td>合計</td><td class="num">${yen(totBulk)}</td><td class="num">${totNorm ? yen(totNorm) : "—"}</td></tr>
+      </table></div>
+      <div style="margin-top:12px"><button class="btn pri" onclick="saveExpBulk()">まとめて保存</button></div>
+      <div class="hint">・利益・納税予想は月の合計で計算するため、<strong>この入れ方でも数字の正確さは落ちません</strong>。カテゴリが分からない少額のものは「雑費」でまとめてOKです。<br>
+      ・「1件ずつ入力済み」の列は、+支出・領収書管理・定期支出・発注などからすでに入っている分です(この画面の入力とは<strong>別に集計される</strong>ので、同じ領収書を両方に入れないようにしてください)。家賃・リース料など毎月同じものは<a href="javascript:void(0)" onclick="go('money')" style="color:var(--info)">定期支出</a>の自動計上が便利です。<br>
+      ・記録は「毎月15日・◯◯カテゴリ・経費まとめ入力」として保存されます。<strong>領収書の現物は法律で保存が必要</strong>なので、月ごとに封筒にまとめて取っておいてください。</div>
+    </div>`;
 };
 /* ================= bulk past-data entry (過去実績まとめ入力・ナビ非掲載) ================= */
 window.openBulk = function(){ go("bulk"); };
