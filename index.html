@@ -1587,7 +1587,7 @@ function payProfitHtml(m, payTotal){
       <tr><td style="color:var(--muted)">給料(${fmtMonth(m)}分の支給額合計)</td><td class="num">− ${yen(payTotal)}</td></tr>
       <tr class="total"><td>利益</td><td class="num" style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</td></tr>
     </table></div>
-    <div class="hint">給料は締日ベース(${fmtMonth(m)}分)、売上・経費は暦月(${fmtMonth(m)}の1日〜末日)の集計です。「支出に計上」した給与など人件費カテゴリの支出${expLabor ? `(${yen(expLabor)})` : ""}は、二重に引かないよう経費から除外し「給料」の行でのみ数えています。</div>
+    <div class="hint">給料は締日ベース(${fmtMonth(m)}分)、売上・経費は暦月(${fmtMonth(m)}の1日〜末日)の集計です。「支出に計上」した給与など人件費カテゴリの支出${expLabor ? `(${yen(expLabor)})` : ""}は、二重に引かないよう経費から除外し「給料」の行でのみ数えています。事業主本人の給料も引いた「経営上の利益(手元に残るお金)」であり、税金の計算では事業主の給料は経費にならないため、<a href="javascript:void(0)" onclick="go('tax')" style="color:var(--info)">納税予想</a>では自動で足し戻して計算します。</div>
   </div>`;
 }
 /* スタッフ生産性: 時間あたり売上と労働分配率(支給額÷担当売上) */
@@ -1694,7 +1694,7 @@ VIEWS.staff = function(){
     `<div class="card"><div class="twrap">${S.staff.length ? `<table>
       <tr><th>名前</th><th>役職</th><th>状態</th><th>給与形態</th><th class="num">基本額</th><th class="num">歩合率</th><th></th></tr>
       ${S.staff.map(st => `<tr${st.retireM ? ' style="opacity:.65"' : ""}>
-        <td style="font-weight:600">${esc(st.name)}</td>
+        <td style="font-weight:600">${esc(st.name)}${st.owner ? ' <span class="chip info">事業主</span>' : ""}</td>
         <td>${esc(st.role)}</td>
         <td style="white-space:nowrap">${st.retireM ? `<span class="chip mut">退社(${fmtMonth(st.retireM)}まで)</span>` : '<span class="chip good">在籍</span>'}</td>
         <td>${st.payType === "monthly" ? "月給" : "時給"}</td>
@@ -1702,12 +1702,13 @@ VIEWS.staff = function(){
         <td class="num">${num(st.commission)}%</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editStaff('${st.id}')">編集</button><button class="btn sm ghost" onclick="delStaff('${st.id}')">削除</button></td>
       </tr>`).join("")}</table>` : `<div class="empty">スタッフが未登録です。「+ スタッフを追加」から登録してください。</div>`}</div>
-    <div class="hint">退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
+    <div class="hint">あなた自身の給料もここで管理している場合は、区分を<strong>「事業主本人」</strong>にしてください。事業主の給料は税金の計算では経費にならないため、納税予想が自動で足し戻して計算します(日々の利益表示は今までどおりです)。退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
 };
 function staffFields(){
   return [
     {key:"name", label:"名前", type:"text", required:true},
     {key:"role", label:"役職", type:"select", options:["スタイリスト","トップスタイリスト","アシスタント","レセプション","店長","オーナー"]},
+    {key:"owner", label:"区分(税金の計算に影響)", type:"select", options:[["","従業員(給料は経費になる)"],["1","事業主(オーナー)本人(給料は経費にならない)"]]},
     {key:"payType", label:"給与形態", type:"select", options:[["hourly","時給"],["monthly","月給"]], half:true},
     {key:"wage", label:"時給/月給(円)", type:"number", required:true, min:0, half:true},
     {key:"commission", label:"歩合率(担当売上に対する%)", type:"number", value:0, min:0, step:"0.5"},
@@ -2713,17 +2714,19 @@ const dedTotal = cfg => DED_ITEMS.reduce((a, [k, , , cap]) => {
 }, 0);
 /* その年に消費税を納めるか。ctFrom = 課税事業者になる年(開業からの免税期間は納付なし) */
 const ctActive = (cfg, yr) => cfg.ct !== "none" && (!num(cfg.ctFrom) || yr >= num(cfg.ctFrom));
-/* その年の 売上・店販売上・利益 の合計(データのある月まで) */
+/* その年の 売上・店販売上・利益・事業主の給料 の合計(データのある月まで)。
+   事業主(owner)の給料は経費にできないため、税金計算ではprofitに足し戻して使う */
 function yearTaxBase(yr){
   const cur = thisMonth();
-  let inc = 0, retail = 0, profit = 0;
+  let inc = 0, retail = 0, profit = 0, ownerPay = 0;
   for(let i = 1; i <= 12; i++){
     const m = yr + "-" + String(i).padStart(2, "0");
     if(m > cur) break; // 未来の月は月給スタッフの給料だけ乗ってしまうため含めない
     const s = monthSummary(m);
     inc += s.inc; retail += s.retail; profit += s.profit;
+    S.staff.filter(st => st.owner && staffActiveIn(st, m)).forEach(st => { ownerPay += calcPay(st, m).total; });
   }
-  return { inc, retail, profit };
+  return { inc, retail, profit, ownerPay };
 }
 /* 所得税+住民税の共通計算(個人事業主の事業所得にも、法人の役員報酬にも使う)。
    base = 控除前の所得、ded = 所得控除の合計(基礎控除は含まない)、jutaku = 住宅ローン控除(税額控除) */
@@ -2854,13 +2857,18 @@ VIEWS.tax = function(){
   const yr = V.taxYear, curYr = +todayStr().slice(0, 4);
   const isCur = yr === curYr, cfg = taxCfg();
   const act = yearTaxBase(yr);
-  const actT = calcTaxes(act, cfg, yr);
+  /* 税金計算のもうけ(profit) = 帳簿上の利益(book) + 事業主の給料(足し戻し) */
+  const mkBase = f => ({ inc: f(act.inc), retail: f(act.retail), book: f(act.profit), ownerPay: f(act.ownerPay), profit: f(act.profit) + f(act.ownerPay) });
+  const actB = mkBase(v => v);
+  const actT = calcTaxes(actB, cfg, yr);
   /* 今年は「年末までこのペース」の見込みも出す(経過日数で年換算。2週間未満はブレが大きいので出さない) */
   const doy = Math.round((new Date(curYr, +todayStr().slice(5,7) - 1, +todayStr().slice(8)) - new Date(curYr, 0, 1)) / 86400000) + 1;
   const diy = (curYr % 4 === 0 && (curYr % 100 !== 0 || curYr % 400 === 0)) ? 366 : 365;
   const canProj = isCur && doy >= 14 && act.inc > 0;
-  const proj = canProj ? { inc: Math.round(act.inc / doy * diy), retail: Math.round(act.retail / doy * diy), profit: Math.round(act.profit / doy * diy) } : null;
-  const projT = proj ? calcTaxes(proj, cfg, yr) : null;
+  const projB = canProj ? mkBase(v => Math.round(v / doy * diy)) : null;
+  const projT = projB ? calcTaxes(projB, cfg, yr) : null;
+  const mainB = projB || actB;
+  const ownerSet = S.staff.some(st => st.owner && !st.retireM);
   const typeLabel = { blue65: "青色申告(65万円控除)", blue10: "青色申告(10万円控除)", white: "白色申告" }[cfg.type];
   const main = projT || actT;
   /* 消費税の状態ラベル(免税期間なら「◯年分から課税予定」) */
@@ -2904,14 +2912,16 @@ VIEWS.tax = function(){
     </div>
     <div class="card"><h2>計算のもと(${projT ? "年末見込み" : "実績"}ベース)</h2>
       <div class="twrap"><table style="max-width:560px">
-        <tr><td style="color:var(--muted)">年間の利益(売上−経費−給料)</td><td class="num">${yen((proj || act).profit)}</td></tr>
+        <tr><td style="color:var(--muted)">帳簿上の利益(売上−経費−給料)</td><td class="num">${yen(mainB.book)}</td></tr>
+        ${mainB.ownerPay ? `<tr><td style="color:var(--muted)">事業主(あなた)の給料 <span style="font-size:11px">経費にできないため足し戻し</span></td><td class="num">+ ${yen(mainB.ownerPay)}</td></tr>
+        <tr><td style="color:var(--muted);font-weight:600">税金計算上のもうけ</td><td class="num" style="font-weight:600">${yen(mainB.profit)}</td></tr>` : ""}
         <tr><td style="color:var(--muted)">青色申告特別控除</td><td class="num">− ${yen(main.blueUsed)}</td></tr>
         <tr><td style="color:var(--muted)">所得控除の合計(社会保険料・生命保険料など)</td><td class="num">− ${yen(main.ded)}</td></tr>
         <tr><td style="color:var(--muted)">基礎控除(誰でも引けます)</td><td class="num">− ${yen(580000)}</td></tr>
         <tr class="total"><td>所得税の課税所得</td><td class="num">${yen(main.taxable)}</td></tr>
       </table></div>
-      <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。${main.jutakuUsed ? `<br>住宅ローン控除 <strong>${yen(main.jutakuUsed)}</strong> は課税所得からではなく、<strong>税額そのもの</strong>(所得税、引き切れない分は住民税から最大97,500円)から差し引いています。` : ""}</div>
-    </div>` + corpCompareCardHtml((proj || act).profit, main, cfg, !!projT)) +
+      <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。${main.jutakuUsed ? `<br>住宅ローン控除 <strong>${yen(main.jutakuUsed)}</strong> は課税所得からではなく、<strong>税額そのもの</strong>(所得税、引き切れない分は住民税から最大97,500円)から差し引いています。` : ""}${!ownerSet && S.staff.length ? `<br><strong>あなた自身の給料もスタッフとして払っている場合</strong>は、<a href="javascript:void(0)" onclick="go('staff')" style="color:var(--info)">スタッフ登録</a>でその人の区分を「事業主本人」にしてください。事業主の給料は経費にできないため、ここで自動的に足し戻して計算します。` : ""}</div>
+    </div>` + corpCompareCardHtml(mainB.profit, main, cfg, !!projT)) +
     `<div class="card"><h2>前提の設定 <span class="h2-sub">変えて「保存」するとその場で計算し直します</span></h2>
       <div class="f-2col" style="max-width:640px">
         <div class="f-row"><label for="set-tax-type">申告の種類</label>
@@ -2953,7 +2963,8 @@ VIEWS.tax = function(){
       <div class="alertline"><span class="chip info">個人事業税</span>${yr + 1}年8月と11月の2回(利益290万円以下なら請求されません)</div>
     </div>
     <div class="hint">※ この金額は帳簿上の利益から機械的に計算した<strong>概算の目安</strong>です(基礎控除58万円など${curYr}年時点の税制で計算)。扶養の状況・各種控除・売上の税率区分などで実際の税額は変わります。申告時は税務署の案内や税理士さんにご確認ください。<br>
-    ※ この計算は<strong>個人事業主向け</strong>です。法人化(会社設立)した場合は法人税の計算になるため、この画面の金額は当てはまりません。</div>`;
+    ※ この計算は<strong>個人事業主向け</strong>です。法人化(会社設立)した場合は法人税の計算になるため、この画面の金額は当てはまりません。<br>
+    ※ <strong>家族に払う給料</strong>は「青色事業専従者給与に関する届出」を出している場合だけ経費にできます。届出をしていない場合、その分も実際は経費になりません(この画面では従業員としてそのまま計算しています)。該当しそうなら税務署・税理士さんにご確認ください。</div>`;
 };
 /* ================= settings ================= */
 VIEWS.settings = function(){
