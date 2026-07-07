@@ -95,7 +95,7 @@ body{
 .grid2>.card{margin-bottom:0}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px 16px}
-.tile .t-label{font-size:12px;color:var(--muted)}
+.tile .t-label{font-size:12px;color:var(--ink2)}
 .tile .t-val{font-size:24px;font-weight:700;letter-spacing:.01em;margin-top:2px}
 .tile .t-note{font-size:11.5px;color:var(--ink2);margin-top:2px}
 .t-good{color:var(--good)} .t-crit{color:var(--crit)}
@@ -115,9 +115,17 @@ body{
 .btn.ghost:hover{background:var(--surface2)}
 .btn:disabled{opacity:.45;cursor:default}
 /* ---- tables ---- */
-.twrap{overflow-x:auto}
+.twrap{overflow-x:auto;
+  background:
+    linear-gradient(to right, var(--surface) 30%, rgba(255,255,255,0)),
+    linear-gradient(to left, var(--surface) 30%, rgba(255,255,255,0)) 100% 0,
+    radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.18), transparent),
+    radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.18), transparent) 100% 0;
+  background-repeat:no-repeat;
+  background-size:40px 100%,40px 100%,12px 100%,12px 100%;
+  background-attachment:local,local,scroll,scroll;}
 table{border-collapse:collapse;width:100%;font-size:13px}
-th{font-size:11.5px;color:var(--muted);font-weight:600;text-align:left;padding:6px 10px;border-bottom:1px solid var(--line2);white-space:nowrap}
+th{font-size:11.5px;color:var(--ink2);font-weight:600;text-align:left;padding:6px 10px;border-bottom:1px solid var(--line2);white-space:nowrap}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
 tr:last-child td{border-bottom:0}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
@@ -173,7 +181,9 @@ input[type=checkbox]{width:auto}
 @media (prefers-reduced-motion: reduce){#toast{transition:none}}
 /* ---- misc ---- */
 .empty{color:var(--muted);font-size:13px;padding:18px 4px;text-align:center}
-.hint{font-size:12px;color:var(--muted);margin-top:8px}
+.hint{font-size:12px;color:var(--ink2);margin-top:8px}
+details.hint summary{cursor:pointer;font-weight:600;color:var(--ink2)}
+details.hint[open] summary{margin-bottom:4px}
 .mnav{display:inline-flex;align-items:center;gap:6px}
 .mnav .mn-label{font-weight:700;font-size:14.5px;min-width:96px;text-align:center;font-variant-numeric:tabular-nums}
 .legend{display:flex;gap:16px;font-size:12px;color:var(--ink2);margin-bottom:8px}
@@ -231,6 +241,11 @@ td.today-col{background:var(--accent-soft)}
   .f-2col{grid-template-columns:1fr}
   /* iOSは16px未満の入力欄タップで画面が自動ズームするため、スマホでは16pxにする */
   input,select,textarea{font-size:16px}
+  /* 指で押しやすいボタンサイズ(Apple推奨44ptに近づける) */
+  .btn{min-height:44px}
+  .btn.sm{min-height:38px;padding:7px 12px}
+  /* 表のセルが1文字ずつ縦に潰れないよう1行表示にし、長い文は…で省略(全文は編集画面で見られる) */
+  .twrap td{white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
   /* モーダルが画面端に張り付かないよう左右に余白を確保 */
   .m-box{margin:12px 8px;max-height:calc(100vh - 24px)}
 }
@@ -329,6 +344,16 @@ function normalizeState(d){
   for(const k of ["payAdj","closings"]) if(!s[k] || typeof s[k] !== "object") s[k] = {};
   s.settings = Object.assign(structuredClone(DEFAULTS.settings), (d && d.settings) || {});
   s.customers.forEach(c => { if(!Array.isArray(c.visits)) c.visits = []; });
+  s.tx.forEach(t => {
+    /* 旧バージョンで「支出に計上」した給与に印を付け直す(利益・納税予想の二重引き防止に使用) */
+    if(t.type === "expense" && t.category === "人件費" && t.staffId && /分給与$/.test(t.memo || "") && t.payrollBooked === undefined) t.payrollBooked = true;
+    /* 旧バージョンの「1日まとめ入力」(技術+店販の2件)を1会計として数えるようにする */
+    if(t.daily && !t.saleId) t.saleId = "daily-" + t.date;
+  });
+  /* 画像はアプリが作るdata:image形式のみ許可(細工されたバックアップによる乗っ取りを防ぐ) */
+  const safeImg = v => (typeof v === "string" && v.startsWith("data:image/")) ? v : "";
+  s.receipts.forEach(r => { if(r.img) r.img = safeImg(r.img); });
+  s.customers.forEach(c => c.visits.forEach(v => { if(v.img) v.img = safeImg(v.img); }));
   return s;
 }
 function loadStateLS(){
@@ -365,7 +390,7 @@ function save(){
 const $ = id => document.getElementById(id);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const yen = n => "¥" + Math.round(n || 0).toLocaleString("ja-JP");
+const yen = n => { const v = Math.round(n || 0); return (v < 0 ? "−" : "") + "¥" + Math.abs(v).toLocaleString("ja-JP"); };
 const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 const todayStr = () => { const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
 const thisMonth = () => todayStr().slice(0,7);
@@ -389,7 +414,7 @@ const INV_CATS = ["施術材料","店販商品","備品・消耗品"];
 const PAY_METHODS = ["現金","カード","QR決済","その他"];
 /* ================= modal / forms ================= */
 let _form = null, _formImg = {};
-let _dismiss = null; // 背景クリック・Escで閉じる動作の横取り用(レジなど入力量の多い画面で誤操作による消失を防ぐ)
+let _dismiss = null; // 背景タップ・Escで閉じる動作の横取り用(レジなど入力量の多い画面で誤操作による消失を防ぐ)
 function openModal(html){ _dismiss = null; $("modal-root").innerHTML = `<div class="m-back" onclick="dismissModal()"></div><div class="m-box">${html}</div>`; $("modal-root").classList.add("open"); }
 window.dismissModal = function(){ if(_dismiss) _dismiss(); else closeModal(); };
 document.addEventListener("keydown", e => { if(e.key === "Escape" && $("modal-root").classList.contains("open")) dismissModal(); });
@@ -417,7 +442,7 @@ function fieldHtml(f, val){
   } else if(f.type === "textarea"){
     inner = `<textarea id="${id}">${esc(val)}</textarea>`;
   } else if(f.type === "image"){
-    const prev = val ? `<img src="${val}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">` : "";
+    const prev = val ? `<img src="${esc(val)}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">` : "";
     if(val) _formImg[f.key] = val;
     inner = `<input type="file" id="${id}" accept="image/*" onchange="onImgPick('${f.key}',this)"><div id="${id}-prev">${prev}</div>`;
   } else {
@@ -480,7 +505,7 @@ function onImgPick(key, input){
       const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
       cv.getContext("2d").drawImage(img, 0, 0, w, h);
       _formImg[key] = cv.toDataURL("image/jpeg", 0.72);
-      $("ff-" + key + "-prev").innerHTML = `<img src="${_formImg[key]}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">`;
+      $("ff-" + key + "-prev").innerHTML = `<img src="${esc(_formImg[key])}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">`;
     };
     img.src = rd.result;
   };
@@ -514,9 +539,10 @@ function monthSummary(m){
   const mat = list.filter(t => t.type === "expense" && t.category === "材料費").reduce((a,t) => a + num(t.amount), 0);
   const retail = incList.filter(t => t.category === "店販(商品売上)").reduce((a,t) => a + num(t.amount), 0);
   const count = salesCount(incList);
-  /* 利益は給料反映後: 売上 − 経費(人件費除く) − 給料(スタッフ給与の自動計算)。
-     「支出に計上」済みの給与(人件費カテゴリ)は二重に引かないよう経費側から除外する */
-  const expOther = list.filter(t => t.type === "expense" && t.category !== "人件費").reduce((a,t) => a + num(t.amount), 0);
+  /* 利益は給料反映後: 売上 − 経費 − 給料(スタッフ給与の自動計算)。
+     給料管理の「支出に計上」で作られた給与(payrollBooked)だけは、給料側と二重に
+     引かないよう経費から除外する。手入力した人件費はふつうの経費として利益から引かれる */
+  const expOther = list.filter(t => t.type === "expense" && !t.payrollBooked).reduce((a,t) => a + num(t.amount), 0);
   const pay = payrollTotalFor(m);
   return { inc, exp, pay, profit: inc - expOther - pay, mat, retail, count, avg: count ? Math.round(inc / count) : 0 };
 }
@@ -769,6 +795,9 @@ function render(){
       : `<button class="navbtn${cur === n.id ? " on" : ""}" onclick="go('${n.id}')"><span class="nb-dot"></span>${esc(n.label)}</button>`
     ).join("");
   VIEWS[cur]();
+  /* モバイルの横スクロールナビで、いま開いている画面のボタンが見える位置に来るようにする */
+  const onBtn = document.querySelector("#sidebar .navbtn.on");
+  if(onBtn && window.innerWidth <= 760) onBtn.scrollIntoView({inline:"center", block:"nearest"});
 }
 function pageHead(title, sub, actions){
   return `<div class="pagehead"><div><h1>${title}</h1>${sub ? `<div class="ph-sub">${sub}</div>` : ""}</div><div class="ph-actions">${actions || ""}</div></div>`;
@@ -1133,7 +1162,7 @@ VIEWS.reports = function(){
   /* 月報: 直近12ヶ月のうち取引がある月(当月は常に表示) */
   const months = lastMonths(12).filter(mm => mm === thisMonth() || txInMonth(mm).length).reverse();
   $("main").innerHTML =
-    pageHead("レポート一覧", "日報と月報をまとめて確認できます。行をクリックすると詳細へ移動します",
+    pageHead("レポート一覧", "日報と月報をまとめて確認できます。行をタップすると詳細へ移動します",
       `<button class="btn" onclick="openBulk()">過去実績のまとめ入力</button>`) +
     `<div class="card"><h2>日報一覧 ${monthNav(m, "reportsNav")} <button class="btn sm" onclick="exportDailyCsv()">CSV出力</button></h2>
       <div class="twrap">${days.length ? `<table>
@@ -1152,7 +1181,7 @@ VIEWS.reports = function(){
         </tr>`).join("")}
         <tr class="total"><td>合計</td><td class="num">${yen(totInc)}</td><td class="num">${totCount}件</td><td class="num">${totCount ? yen(Math.round(totInc / totCount)) : "—"}</td><td class="num">${yen(totExp)}</td><td class="num">${yen(totInc - totExp)}</td><td></td><td></td></tr>
       </table>` : `<div class="empty">${fmtMonth(m)}の記録はまだありません</div>`}</div>
-      <div class="hint">行をクリックするとその日のレジ締め(日計)が開きます。過不足がある日は金額を赤字で表示します。</div>
+      <div class="hint">行をタップするとその日のレジ締め(日計)が開きます。過不足がある日は金額を赤字で表示します。</div>
     </div>
     <div class="card"><h2>月報一覧 <span class="h2-sub">直近12ヶ月</span></h2>
       <div class="twrap">${months.length ? `<table>
@@ -1170,7 +1199,7 @@ VIEWS.reports = function(){
             ${target > 0 ? `<td class="num">${targetFor(mm) > 0 ? Math.round(s.inc / targetFor(mm) * 100) + "%" : "—"}</td>` : ""}
             <td><button class="btn sm ghost" onclick="event.stopPropagation();openMonthReport('${mm}')">月次レポート ›</button></td>
           </tr>`; }).join("")}</table>` : `<div class="empty">まだ記録がありません</div>`}</div>
-      <div class="hint">行をクリックするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。利益は「売上 − 経費(人件費除く) − その月分の給料」で、スタッフの基本給・歩合は毎月自動で反映されます(給料管理で内訳を確認できます)。</div>
+      <div class="hint">行をタップするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。利益は「売上 − 経費(計上済み給与を除く) − その月分の給料」で、スタッフの基本給・歩合は毎月自動で反映されます(給料管理で内訳を確認できます)。</div>
     </div>` +
     yoyCardHtml(m.slice(0, 4)) +
     trendCardsHtml();
@@ -1247,7 +1276,7 @@ VIEWS.money = function(){
     return `<tr><td><span class="chip ${type === "income" ? "info" : "mut"}">${type === "income" ? "収入" : "支出"}</span></td><td>${esc(cat)}</td><td class="num">${yen(v)}</td></tr>`;
   }).join("");
   const pay = payrollTotalFor(m);
-  const labor = list.filter(t => t.type === "expense" && t.category === "人件費").reduce((a, t) => a + num(t.amount), 0);
+  const labor = list.filter(t => t.type === "expense" && t.payrollBooked).reduce((a, t) => a + num(t.amount), 0);
   const profit = monthSummary(m).profit;
   $("main").innerHTML =
     pageHead("収支管理", "日々の売上と経費を記録します",
@@ -1261,7 +1290,7 @@ VIEWS.money = function(){
         ${pay || labor ? `<span>給料(${fmtMonth(m)}分・自動計算) <strong style="font-size:17px">${yen(pay)}</strong></span>
         <span>利益(売上−経費−給料) <strong style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</strong></span>` : ""}
       </div>
-      ${pay || labor ? `<div class="hint">給料は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の自動計算(締日ベース)です。「支出に計上」を押すまで上の支出・下の明細には入りませんが、<strong>利益には自動で反映されています</strong>。${labor ? `計上済みの人件費(${yen(labor)})は二重に引かないよう「給料」の側でのみ数えています。` : "給料日に給料管理の「全員分を支出に計上」を押すと明細にも記録されます。"}</div>` : ""}
+      ${pay || labor ? `<div class="hint">給料は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の自動計算(締日ベース)です。「支出に計上」を押すまで上の支出・下の明細には入りませんが、<strong>利益には自動で反映されています</strong>。${labor ? `給料管理から計上した給与(${yen(labor)})は二重に引かないよう「給料」の側でのみ数えています(手入力した人件費はふつうの経費として利益から引かれます)。` : "給料日に給料管理の「全員分を支出に計上」を押すと明細にも記録されます。"}</div>` : ""}
     </div>
     <div class="card"><h2>明細 <span class="h2-sub">${list.length}件</span></h2>
       <div class="twrap">${list.length ? `<table>
@@ -1380,10 +1409,11 @@ window.openDailySale = function(date){
     ],
     onsave: v => {
       let changed = false;
+      const saleId = "daily-" + v.date; // 技術+店販の2件を1会計として数える(客数・客単価用)
       DAILY_CATS.forEach(([k, cat]) => {
         const val = Math.max(0, num(v[k]));
         S.tx = S.tx.filter(t => !(t.daily && t.type === "income" && t.date === v.date && t.category === cat));
-        if(val > 0){ S.tx.push({id: uid(), daily: true, type: "income", date: v.date, category: cat, amount: val, memo: v.memo || "1日まとめ", staffId: "", pay: v.pay || "現金"}); changed = true; }
+        if(val > 0){ S.tx.push({id: uid(), daily: true, saleId, type: "income", date: v.date, category: cat, amount: val, memo: v.memo || "1日まとめ", staffId: "", pay: v.pay || "現金"}); changed = true; }
       });
       save(); toast(changed ? `${fmtDate(v.date)}の売上まとめを保存しました` : `${fmtDate(v.date)}のまとめ入力を削除しました`); render();
     } });
@@ -1435,7 +1465,7 @@ VIEWS.receipts = function(){
     <div class="card"><div class="twrap">${list.length ? `<table>
       <tr><th>写真</th><th>日付</th><th>発行元</th><th class="num">金額</th><th>カテゴリ</th><th>メモ</th><th></th></tr>
       ${list.map(r => `<tr>
-        <td>${r.img ? `<img src="${r.img}" class="rcpt-thumb" alt="領収書" onclick="viewRcpt('${r.id}')">` : `<div class="rcpt-none">なし</div>`}</td>
+        <td>${r.img ? `<img src="${esc(r.img)}" class="rcpt-thumb" alt="領収書" onclick="viewRcpt('${r.id}')">` : `<div class="rcpt-none">なし</div>`}</td>
         <td style="white-space:nowrap">${fmtDate(r.date)}</td>
         <td>${esc(r.vendor)}</td>
         <td class="num" style="font-weight:600">${yen(r.amount)}</td>
@@ -1477,7 +1507,7 @@ window.delRcpt = function(id){
 };
 window.viewRcpt = function(id){
   const r = S.receipts.find(x => x.id === id); if(!r || !r.img) return;
-  openModal(`<h3>${esc(r.vendor)} ・ ${yen(r.amount)}</h3><img src="${r.img}" class="imgfull" alt="領収書">
+  openModal(`<h3>${esc(r.vendor)} ・ ${yen(r.amount)}</h3><img src="${esc(r.img)}" class="imgfull" alt="領収書">
     <div class="m-foot"><button class="btn" onclick="closeModal()">閉じる</button></div>`);
 };
 window.exportRcptCsv = function(){
@@ -1500,14 +1530,14 @@ VIEWS.shifts = function(){
       const shs = S.shifts.filter(s => s.staffId === st.id && s.date === d);
       shs.forEach(s => weekH += shiftHours(s));
       return `<td${d === tday ? ' class="today-col"' : ""} style="text-align:center">
-        ${shs.map(s => `<button class="shiftchip" onclick="editShift('${s.id}')" title="クリックで編集">${esc(s.start)}–${esc(s.end)}</button>`).join("")}
+        ${shs.map(s => `<button class="shiftchip" onclick="editShift('${s.id}')" title="タップで編集">${esc(s.start)}–${esc(s.end)}</button>`).join("")}
         <button class="addcell" onclick="addShift('${st.id}','${d}')" aria-label="シフト追加">+</button>
       </td>`;
     }).join("");
     return `<tr><td style="font-weight:600;white-space:nowrap">${esc(st.name)}</td>${cells}<td class="num" style="white-space:nowrap">${weekH.toFixed(1)}h</td></tr>`;
   }).join("");
   $("main").innerHTML =
-    pageHead("シフト管理", "セルの「+」をクリックして勤務時間を登録します",
+    pageHead("シフト管理", "セルの「+」をタップして勤務時間を登録します",
       `<span class="mnav"><button class="btn sm" onclick="weekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="weekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="weekToday()">今週</button>`) +
     (S.staff.length
       ? `<div class="card"><div class="twrap"><table><tr><th>スタッフ</th>${head}<th class="num">週合計</th></tr>${rows}</table></div>
@@ -1574,28 +1604,29 @@ VIEWS.payroll = function(){
           ${rows}
           <tr class="total"><td>合計</td><td></td><td></td><td></td><td></td><td></td><td class="num">${yen(sumTotal)}</td><td></td><td></td></tr>
         </table></div>
-        <div class="hint"><strong>基本給・歩合・手当・控除の金額はタップするとその場で変更できます</strong>(表示中の月分から新しい金額で計算し、それより前の月は自動で今のまま。昇給の履歴も自動で残ります)。勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。締日・支払日は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</div></div>`
+        <div class="hint"><strong>基本給・歩合・手当・控除の金額はタップするとその場で変更できます</strong>(表示中の月分から新しい金額で計算し、それより前の月は自動で今のまま。昇給の履歴も自動で残ります)。</div>
+        <details class="hint"><summary>計算ルールの説明(タップで開く)</summary>勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。締日・支払日は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</details></div>`
         + payProfitHtml(m, sumTotal)
         + productivityHtml(m)
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
 };
 /* 利益カード: 売上 − 経費 − 給料 = 利益。
-   「支出に計上」済みの給与は人件費カテゴリに入るため、二重に引かないよう
-   経費からは人件費カテゴリを除外し、給料は給与計算(支給額合計)側で数える */
+   「支出に計上」で作られた給与(payrollBooked)は、二重に引かないよう
+   経費から除外し、給料は給与計算(支給額合計)側で数える。手入力の人件費は経費に含める */
 function payProfitHtml(m, payTotal){
   const list = txInMonth(m);
   const inc = list.filter(t => t.type === "income").reduce((a, t) => a + num(t.amount), 0);
-  const expOther = list.filter(t => t.type === "expense" && t.category !== "人件費").reduce((a, t) => a + num(t.amount), 0);
-  const expLabor = list.filter(t => t.type === "expense" && t.category === "人件費").reduce((a, t) => a + num(t.amount), 0);
+  const expOther = list.filter(t => t.type === "expense" && !t.payrollBooked).reduce((a, t) => a + num(t.amount), 0);
+  const expLabor = list.filter(t => t.type === "expense" && t.payrollBooked).reduce((a, t) => a + num(t.amount), 0);
   const profit = inc - expOther - payTotal;
   return `<div class="card"><h2>${fmtMonth(m)}の利益 <span class="h2-sub">売上 − 経費 − 給料</span></h2>
     <div class="twrap"><table>
       <tr><td style="color:var(--muted);width:240px">売上(${fmtMonth(m)}・暦月)</td><td class="num">${yen(inc)}</td></tr>
-      <tr><td style="color:var(--muted)">経費(人件費カテゴリを除く)</td><td class="num">− ${yen(expOther)}</td></tr>
+      <tr><td style="color:var(--muted)">経費(計上済みの給与を除く)</td><td class="num">− ${yen(expOther)}</td></tr>
       <tr><td style="color:var(--muted)">給料(${fmtMonth(m)}分の支給額合計)</td><td class="num">− ${yen(payTotal)}</td></tr>
       <tr class="total"><td>利益</td><td class="num" style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</td></tr>
     </table></div>
-    <div class="hint">給料は締日ベース(${fmtMonth(m)}分)、売上・経費は暦月(${fmtMonth(m)}の1日〜末日)の集計です。「支出に計上」した給与など人件費カテゴリの支出${expLabor ? `(${yen(expLabor)})` : ""}は、二重に引かないよう経費から除外し「給料」の行でのみ数えています。事業主本人の給料も引いた「経営上の利益(手元に残るお金)」であり、税金の計算では事業主の給料は経費にならないため、<a href="javascript:void(0)" onclick="go('tax')" style="color:var(--info)">納税予想</a>では自動で足し戻して計算します。</div>
+    <div class="hint">給料は締日ベース(${fmtMonth(m)}分)、売上・経費は暦月(${fmtMonth(m)}の1日〜末日)の集計です。「支出に計上」ボタンで記録した給与${expLabor ? `(${yen(expLabor)})` : ""}は、二重に引かないよう経費から除外し「給料」の行でのみ数えています(手入力した人件費はふつうの経費として引かれます)。事業主本人の給料も引いた「経営上の利益(手元に残るお金)」であり、税金の計算では事業主の給料は経費にならないため、<a href="javascript:void(0)" onclick="go('tax')" style="color:var(--info)">納税予想</a>では自動で足し戻して計算します。</div>
   </div>`;
 }
 /* スタッフ生産性: 時間あたり売上と労働分配率(支給額÷担当売上) */
@@ -1641,8 +1672,13 @@ window.editWageCell = function(staffId){
     ],
     onsave: v => {
       if(num(v.wage) === num(P.wage)){ toast("金額は変わっていません"); return; }
-      applyPayChangeFrom(st, m, { payType: P.payType, wage: num(v.wage) });
-      save(); toast(`${fmtMonth(m)}分から${isMo ? "月給" : "時給"} ${yen(v.wage)} で計算します(それより前の月は今のままです)`); render();
+      const doIt = () => {
+        applyPayChangeFrom(st, m, { payType: P.payType, wage: num(v.wage) });
+        save(); toast(`${fmtMonth(m)}分から${isMo ? "月給" : "時給"} ${yen(v.wage)} で計算します(それより前の月は今のままです)`); render();
+      };
+      /* この月より後に別の給与改定が設定済みの場合は、消える前に確認する */
+      if((st.hist || []).some(h => h.until >= m)) ask(`${fmtMonth(m)}より後に別の給与改定が設定されています。今回の変更で${fmtMonth(m)}分以降はすべて新しい金額になります(後の改定は消えます)。よろしいですか?`, doIt);
+      else doIt();
     } });
 };
 window.editCommCell = function(staffId){
@@ -1654,8 +1690,12 @@ window.editCommCell = function(staffId){
     ],
     onsave: v => {
       if(num(v.commission) === num(P.commission)){ toast("歩合率は変わっていません"); return; }
-      applyPayChangeFrom(st, m, { commission: num(v.commission) });
-      save(); toast(`${fmtMonth(m)}分から歩合 ${num(v.commission)}% で計算します(それより前の月は今のままです)`); render();
+      const doIt = () => {
+        applyPayChangeFrom(st, m, { commission: num(v.commission) });
+        save(); toast(`${fmtMonth(m)}分から歩合 ${num(v.commission)}% で計算します(それより前の月は今のままです)`); render();
+      };
+      if((st.hist || []).some(h => h.until >= m)) ask(`${fmtMonth(m)}より後に別の給与改定が設定されています。今回の変更で${fmtMonth(m)}分以降はすべて新しい歩合率になります(後の改定は消えます)。よろしいですか?`, doIt);
+      else doIt();
     } });
 };
 window.editAdj = function(staffId){
@@ -1680,7 +1720,7 @@ window.bookPay = function(staffId){
   const p = calcPay(st, m);
   ask(`${st.name}の${fmtMonth(m)}分給与 ${yen(p.total)} を人件費として支出に計上し、支払済にしますか?(計上日: 支払日 ${fmtDate(payDate(m))})`, () => {
     const key = staffId + "_" + m;
-    S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId});
+    S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId, payrollBooked: true});
     S.payAdj[key] = Object.assign({}, S.payAdj[key], {paid:true, booked:true});
     save(); toast("支出に計上しました"); render();
   });
@@ -1695,7 +1735,7 @@ window.bookPayAll = function(){
   const sum = targets.reduce((a, x) => a + x.p.total, 0);
   ask(`${fmtMonth(m)}分の給与 ${targets.length}名分(合計 ${yen(sum)})を人件費として支出に計上し、支払済にしますか?(計上日: 支払日 ${fmtDate(payDate(m))})`, () => {
     targets.forEach(({ st, p }) => {
-      S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId: st.id});
+      S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId: st.id, payrollBooked: true});
       S.payAdj[st.id + "_" + m] = Object.assign({}, S.payAdj[st.id + "_" + m], {paid:true, booked:true});
     });
     save(); toast(`${targets.length}名分(${yen(sum)})を支出に計上しました`); render();
@@ -1970,7 +2010,7 @@ function renderCustDetail(){
         ${visits.length ? visits.map(v => `<div class="visit-item">
           <div class="v-date">${fmtDate(v.date)} <span style="color:var(--muted);font-weight:400">${esc(staffName(v.staffId))}</span> <span style="float:right;font-variant-numeric:tabular-nums">${yen(v.price)}</span></div>
           <div class="v-body">${esc(v.menu)}${v.note ? " — " + esc(v.note) : ""}</div>
-          ${v.img ? `<img src="${v.img}" class="rcpt-thumb" style="margin-top:4px" alt="施術写真" onclick="viewVisitImg('${c.id}','${v.id}')">` : ""}
+          ${v.img ? `<img src="${esc(v.img)}" class="rcpt-thumb" style="margin-top:4px" alt="施術写真" onclick="viewVisitImg('${c.id}','${v.id}')">` : ""}
           <button class="btn sm ghost" onclick="delVisit('${c.id}','${v.id}')">削除</button>
         </div>`).join("") : `<div class="empty">来店記録はまだありません</div>`}
       </div>
@@ -2057,13 +2097,13 @@ function renderApptWeek(){
       return `<td${d === tday ? ' class="today-col"' : ""} style="vertical-align:top;text-align:center">${list.map(a => {
         const st2 = a.status === "done" ? "background:var(--good-chip);color:var(--good)"
           : a.status === "cancel" ? "background:var(--surface2);color:var(--muted);text-decoration:line-through" : "";
-        return `<button class="shiftchip" style="${st2}" onclick="editAppt('${a.id}')" title="クリックで編集">${esc(a.time)} ${esc(a.name)}</button>`;
+        return `<button class="shiftchip" style="${st2}" onclick="editAppt('${a.id}')" title="タップで編集">${esc(a.time)} ${esc(a.name)}</button>`;
       }).join("")}</td>`;
     }).join("");
     return `<tr><td style="font-weight:600;white-space:nowrap">${esc(name)}</td>${cells}</tr>`;
   }).join("");
   $("main").innerHTML =
-    pageHead("予約管理", `${fmtDate(days[0])} 〜 ${fmtDate(days[6])} ・ 予約をクリックすると編集できます`,
+    pageHead("予約管理", `${fmtDate(days[0])} 〜 ${fmtDate(days[6])} ・ 予約をタップすると編集できます`,
       `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptWeekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="apptWeekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="apptWeekToday()">今週</button><button class="btn sm" onclick="window.print()">印刷</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
     `<div class="card"><div class="twrap"><table><tr><th>担当</th>${head}</tr>${rows}</table></div>
       <div class="hint">同じ担当で時間帯が重なる予約は、登録・編集時に警告が表示されます。</div></div>`;
@@ -2074,13 +2114,13 @@ VIEWS.appts = function(){
   const list = S.appts.filter(a => a.date === d).sort((a,b) => a.time.localeCompare(b.time));
   const openCount = list.filter(a => a.status === "open").length;
   $("main").innerHTML =
-    pageHead("予約管理", `${fmtDate(d)} の予約 ・ 来店処理をすると売上と顧客カルテに自動反映されます`,
+    pageHead("予約管理", `${fmtDate(d)} の予約 ・ 行をタップすると来店処理などの操作メニューが開きます`,
       `${apptModeBtns()}<span class="mnav"><button class="btn sm" onclick="apptNav(-1)" aria-label="前日">‹</button><span class="mn-label">${fmtDate(d)}</span><button class="btn sm" onclick="apptNav(1)" aria-label="翌日">›</button></span><button class="btn sm" onclick="apptToday()">今日</button>${openCount ? `<button class="btn sm" onclick="copyRemindAll('${d}')">リマインド文を全件コピー</button>` : ""}<button class="btn sm" onclick="window.print()">印刷</button><button class="btn pri" onclick="addAppt()">+ 予約を追加</button>`) +
     `<div class="card"><div class="twrap">${list.length ? `<table>
       <tr><th>時刻</th><th>お客様</th><th>メニュー</th><th>担当</th><th class="num">予定金額</th><th>状態</th><th></th></tr>
       ${list.map(a => {
         const [lbl, cls] = APPT_STATUS[a.status] || APPT_STATUS.open;
-        return `<tr>
+        return `<tr class="rowlink" onclick="apptRowTap(event,'${a.id}')">
           <td style="font-weight:700;font-variant-numeric:tabular-nums">${esc(a.time)}${num(a.dur) ? `<div style="font-size:11px;color:var(--muted);font-weight:400">${num(a.dur)}分</div>` : ""}</td>
           <td>${esc(a.name)}${a.nominated ? ' <span class="chip info">指名</span>' : ""}${a.nextApptId ? ' <span class="chip good">次回予約済</span>' : ""}</td>
           <td>${esc(a.menu)}${a.memo ? `<div style="font-size:11px;color:var(--muted)">${esc(a.memo)}</div>` : ""}</td>
@@ -2176,6 +2216,22 @@ window.editAppt = function(id){
 window.delAppt = function(id){
   ask("この予約を削除しますか?", () => { S.appts = S.appts.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
 };
+/* 予約の行タップで操作メニューを開く(スマホでは右端のボタンが見えないため)。ボタン自体のタップは素通し */
+window.apptRowTap = function(ev, id){
+  if(ev.target.closest("button") || ev.target.closest("a")) return;
+  const a = S.appts.find(x => x.id === id); if(!a) return;
+  const [lbl] = APPT_STATUS[a.status] || APPT_STATUS.open;
+  openModal(`<h3>${esc(a.time)} ${esc(a.name)} 様 <span class="h2-sub">${esc(a.menu || "")} ・ ${lbl}</span></h3>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${a.status === "open" ? `<button class="btn pri" onclick="closeModal();checkinAppt('${a.id}')">来店処理(会計)</button>
+      <button class="btn" onclick="closeModal();copyRemind('${a.id}')">リマインド文をコピー</button>
+      <button class="btn" onclick="closeModal();cancelAppt('${a.id}')">キャンセルにする</button>` : ""}
+      ${a.status === "cancel" ? `<button class="btn" onclick="closeModal();reopenAppt('${a.id}')">予約に戻す</button>` : ""}
+      <button class="btn" onclick="closeModal();editAppt('${a.id}')">編集</button>
+      <button class="btn danger" onclick="closeModal();delAppt('${a.id}')">削除</button>
+    </div>
+    <div class="m-foot"><button class="btn" onclick="closeModal()">閉じる</button></div>`);
+};
 window.cancelAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
   a.status = "cancel"; save(); toast("キャンセルにしました(「予約に戻す」で元に戻せます)"); render();
@@ -2191,6 +2247,7 @@ window.reopenAppt = function(id){
 let REG = null; // {apptId, name, lines:[{name,staffId,price,qty}], pay, tendered, note, nextDate, nextTime, catTab}
 window.checkinAppt = function(id){
   const a = S.appts.find(x => x.id === id); if(!a) return;
+  _formImg = {}; // 前回の施術写真バッファが次の会計に紛れ込まないように
   REG = { apptId: id, name: a.name, pay: "現金", tendered: "", note: "", nextDate: "", nextTime: "", catTab: "all",
     lines: [{ name: a.menu || "", staffId: a.staffId || "", price: num(a.price), qty: 1 }] };
   renderRegister();
@@ -2310,7 +2367,7 @@ function renderRegister(){
     <div class="f-row" style="margin-top:12px"><label for="reg-note">施術メモ(カルテに記録)</label><textarea id="reg-note">${esc(REG.note || "")}</textarea></div>
     <div class="f-row"><label for="reg-img">施術写真(カルテに保存)</label>
       <input id="reg-img" type="file" accept="image/*" onchange="onImgPick('regimg', this)">
-      <div id="ff-regimg-prev">${_formImg.regimg ? `<img src="${_formImg.regimg}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">` : ""}</div>
+      <div id="ff-regimg-prev">${_formImg.regimg ? `<img src="${esc(_formImg.regimg)}" class="imgfull" style="max-height:160px;width:auto;margin-top:8px" alt="添付画像">` : ""}</div>
     </div>
     <div class="f-2col">
       <div class="f-row"><label for="reg-nd">次回予約日(任意)</label><input id="reg-nd" type="date" value="${esc(REG.nextDate || "")}"></div>
@@ -2320,7 +2377,7 @@ function renderRegister(){
   `);
   const box = document.querySelector("#modal-root .m-box");
   if(box) box.classList.add("wide");
-  _dismiss = regAskClose; // 背景クリック・Escでいきなり閉じず、確認を挟む
+  _dismiss = regAskClose; // 背景タップ・Escでいきなり閉じず、確認を挟む
   regSums();
 }
 /* 会計の中断確認。誤タップで明細が消えるのを防ぐ(「入力へ戻る」で元の内容に復帰) */
@@ -2330,7 +2387,7 @@ window.regAskClose = function(){
   openModal(`<h3>会計を中断しますか?</h3><p style="font-size:13.5px">入力した明細は保存されません。</p>
     <div class="m-foot"><button class="btn" onclick="renderRegister()">入力へ戻る</button>
     <button class="btn danger" onclick="closeModal()">中断する</button></div>`);
-  _dismiss = renderRegister; // 確認画面で背景クリック・Escした場合も入力へ戻す
+  _dismiss = renderRegister; // 確認画面で背景タップ・Escした場合も入力へ戻す
 };
 window.regConfirm = function(){
   regCapture();
@@ -2574,7 +2631,7 @@ window.viewVisitImg = function(custId, visitId){
   const c = S.customers.find(x => x.id === custId);
   const v = c && c.visits.find(x => x.id === visitId);
   if(!v || !v.img) return;
-  openModal(`<h3>${esc(c.name)} 様 ・ ${fmtDate(v.date)} ${esc(v.menu || "")}</h3><img src="${v.img}" class="imgfull" alt="施術写真">
+  openModal(`<h3>${esc(c.name)} 様 ・ ${fmtDate(v.date)} ${esc(v.menu || "")}</h3><img src="${esc(v.img)}" class="imgfull" alt="施術写真">
     <div class="m-foot"><button class="btn" onclick="closeModal()">閉じる</button></div>`);
 };
 /* ================= payslip (給与明細・ナビ非掲載) ================= */
@@ -2705,7 +2762,7 @@ window.delMenu = function(id){
 };
 /* ================= tax estimate (納税予想) =================
    個人事業主(美容業)向けの概算。前提は設定カードで変更できる。
-   - 事業のもうけ = アプリの利益(売上 − 経費(人件費除く) − 給料)をそのまま使う
+   - 事業のもうけ = アプリの利益(売上 − 経費 − 給料。計上済み給与の二重引きは除外)をそのまま使う
    - 所得税: 青色申告特別控除・社会保険料等・基礎控除58万円を引いた課税所得に累進税率、復興特別所得税2.1%込み
    - 住民税: 基礎控除43万円・税率10% + 均等割5,000円(森林環境税含む)
    - 個人事業税: 美容業は第3種(5%)。青色控除は適用されないため控除前の利益から事業主控除290万円を引く
