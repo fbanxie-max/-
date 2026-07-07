@@ -312,6 +312,7 @@ const DEFAULTS = {
   closings: {},   // key 'YYYY-MM-DD' -> {float,actual,floatCnt:{金種:枚数},actualCnt,memo,closed} レジ締め
   tickets: [],    // {id,customerId,name,total,used,price,date,memo} 回数券
   menus: [],      // {id,name,price,cat,dur,cost} メニュー料金表(組み合わせメニュー可)。catは集計カテゴリ、costは材料原価(任意)
+  staffStats: {}, // key `${staffId}_${month}` -> {sales,retail,customers,newCust,nom,memo} スタッフ実績の月次まとめ入力(分析・歩合用。売上には足さない)
   recurring: []   // {id,name,amount,category,taxRate,day,startM,lastM} 定期支出(毎月自動計上)。lastM=計上済みの最終月
 };
 let S = structuredClone(DEFAULTS); // 末尾のboot()で読み込み後に置き換える
@@ -341,7 +342,7 @@ function normalizeState(d){
   const s = Object.assign(structuredClone(DEFAULTS), d);
   for(const k of ["staff","tx","receipts","shifts","orders","inv","customers","appts","tickets","menus","recurring"])
     if(!Array.isArray(s[k])) s[k] = [];
-  for(const k of ["payAdj","closings"]) if(!s[k] || typeof s[k] !== "object") s[k] = {};
+  for(const k of ["payAdj","closings","staffStats"]) if(!s[k] || typeof s[k] !== "object") s[k] = {};
   s.settings = Object.assign(structuredClone(DEFAULTS.settings), (d && d.settings) || {});
   s.customers.forEach(c => { if(!Array.isArray(c.visits)) c.visits = []; });
   const ownerIds = new Set(s.staff.filter(st => st.owner === "1").map(st => st.id));
@@ -415,6 +416,14 @@ function shiftDetail(sh){
 }
 function shiftHours(sh){ return shiftDetail(sh).total; }
 const staffName = id => (S.staff.find(s => s.id === id) || {}).name || "—";
+/* スタッフ実績の月次まとめ入力。売上が入っていればその月のそのスタッフの実績として優先する(なければ日々の担当付き記録から自動集計) */
+const staffStatOf = (stId, m) => (S.staffStats || {})[stId + "_" + m] || null;
+function manualStaffSales(stId, m){
+  const man = staffStatOf(stId, m);
+  return man && (num(man.sales) > 0 || num(man.retail) > 0) ? num(man.sales) + num(man.retail) : null;
+}
+const txStaffSales = (stId, m) => txInMonth(m).filter(t => t.type === "income" && t.staffId === stId).reduce((a, t) => a + num(t.amount), 0);
+const mergedStaffSales = (stId, m) => { const v = manualStaffSales(stId, m); return v !== null ? v : txStaffSales(stId, m); };
 function toast(msg){
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600);
@@ -588,12 +597,17 @@ function topN(entries, n){
   const rest = entries.slice(n).reduce((a,e) => a + e[1], 0);
   return [...entries.slice(0, n), ["その他", rest]];
 }
-/* 収入を担当者別に集計。登録済みスタッフ以外のIDは退職スタッフとしてまとめる */
+/* 収入を担当者別に集計。登録済みスタッフ以外のIDは退職スタッフとしてまとめる。
+   「スタッフ実績」の月次まとめ入力があるスタッフはその値を優先する */
 function staffSalesEntries(m){
   const g = {};
   txInMonth(m).filter(t => t.type === "income").forEach(t => {
     const k = !t.staffId ? "担当なし" : (S.staff.some(s => s.id === t.staffId) ? staffName(t.staffId) : "退職スタッフ");
     g[k] = (g[k] || 0) + num(t.amount);
+  });
+  S.staff.forEach(st => {
+    const v = manualStaffSales(st.id, m);
+    if(v !== null) g[st.name] = v;
   });
   return Object.entries(g).sort((a,b) => b[1] - a[1]);
 }
@@ -771,7 +785,10 @@ function calcPay(st, m){
   /* 法定割増(時給者のみ自動計算): 1日8時間超と22時以降の深夜は各25%増し。
      月給者・歩合分の割増と週40時間超の割増は自動計算していない(画面で警告) */
   const extra = hourly ? Math.round((otH + nightH) * num(P.wage) * 0.25) : 0;
-  const sales = S.tx.filter(t => t.type === "income" && t.staffId === st.id && t.date >= pp.from && t.date <= pp.to).reduce((a,t) => a + num(t.amount), 0);
+  /* 担当売上: 「スタッフ実績」の月次まとめ入力があればそれを優先、なければ担当付きの売上記録(締日期間)から自動集計 */
+  const manSales = manualStaffSales(st.id, m);
+  const sales = manSales !== null ? manSales
+    : S.tx.filter(t => t.type === "income" && t.staffId === st.id && t.date >= pp.from && t.date <= pp.to).reduce((a,t) => a + num(t.amount), 0);
   const comm = Math.round(sales * num(P.commission) / 100);
   /* 手当・控除は項目別(通勤手当・源泉所得税・雇用保険料)。旧データはallow/deductのみでそのまま動く */
   const commute = num(adj.commute), allowOther = num(adj.allow);
@@ -795,6 +812,7 @@ const NAV = [
   {sec:"スタッフ"},
   {id:"shifts", label:"シフト管理"},
   {id:"payroll", label:"給料管理"},
+  {id:"sperf", label:"スタッフ実績"},
   {id:"staff", label:"スタッフ登録"},
   {sec:"物品"},
   {id:"orders", label:"発注管理"},
@@ -816,6 +834,7 @@ V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
 V.closeDate = todayStr(); V.lostDays = 60; V.bulkN = 24;
 V.orderFilter = "all"; V.custSel = null; V.custQ = ""; V.chartN = 6;
 V.taxYear = +todayStr().slice(0, 4);
+V.sperfMonth = thisMonth();
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
 function render(){
   $("sidebar").innerHTML =
@@ -1660,7 +1679,7 @@ VIEWS.payroll = function(){
   });
   $("main").innerHTML =
     pageHead("給料管理", `${fmtMonth(m)}分 = ${fmtDate(pp.from)}〜${fmtDate(pp.to)}(${payCloseLabel()}締め)・ 支払日 ${fmtDate(payDate(m))}(${payDayLabel()}払い)`,
-      `${monthNav(m, "payNav")}<button class="btn" onclick="bookPayAll()">全員分を支出に計上</button><button class="btn" onclick="openPayslips()">給与明細(印刷)</button><button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
+      `${monthNav(m, "payNav")}<button class="btn" onclick="V.sperfMonth=V.payMonth;go('sperf')">実績を入力</button><button class="btn" onclick="bookPayAll()">全員分を支出に計上</button><button class="btn" onclick="openPayslips()">給与明細(印刷)</button><button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
     (S.staff.length
       ? `<div class="card"><div class="twrap"><table>
           <tr><th>スタッフ</th><th class="num">勤務時間</th><th class="num">基本給</th><th class="num">歩合</th><th class="num">手当</th><th class="num">控除</th><th class="num">支給額</th><th>状態</th><th></th></tr>
@@ -1824,6 +1843,92 @@ window.exportPayCsv = function(){
     rows.push([st.name, p.days, p.hours.toFixed(1), p.otH.toFixed(1), p.nightH.toFixed(1), p.base, p.extra, p.sales, p.comm, p.commute, p.allowOther, p.srcTax, p.empIns, p.deductOther, p.total, p.paid ? "支払済" : "未払"]);
   });
   dlCSV(`給与_${m}.csv`, rows);
+};
+/* ================= staff performance (スタッフ実績・月次まとめ) ================= */
+window.sperfNav = d => { V.sperfMonth = addMonths(V.sperfMonth, d); render(); };
+window.saveSperf = function(){
+  const m = V.sperfMonth;
+  let n = 0;
+  S.staff.filter(st => staffActiveIn(st, m)).forEach(st => {
+    const g = k => Math.max(0, num(($("sp-" + k + "-" + st.id) || {}).value));
+    const memoEl = $("sp-memo-" + st.id);
+    const v = { sales: g("sales"), retail: g("retail"), customers: g("customers"), newCust: g("new"), nom: g("nom"), memo: memoEl ? memoEl.value : "" };
+    const key = st.id + "_" + m;
+    if(v.sales || v.retail || v.customers || v.newCust || v.nom || v.memo){ S.staffStats[key] = v; n++; }
+    else delete S.staffStats[key]; // 全部空にして保存すると削除(自動集計に戻る)
+  });
+  save(); toast(n ? `${fmtMonth(m)}のスタッフ実績を保存しました(歩合・スタッフ別売上に反映されます)` : "入力が空だったため、自動集計に戻しました"); render();
+};
+VIEWS.sperf = function(){
+  const m = V.sperfMonth;
+  const list = S.staff.filter(st => staffActiveIn(st, m));
+  const rows = list.map(st => {
+    const man = staffStatOf(st.id, m) || {};
+    const auto = txStaffSales(st.id, m);
+    const inp = (k, val, w) => `<input id="sp-${k}-${st.id}" type="number" inputmode="numeric" min="0" value="${num(val) > 0 ? num(val) : ""}" style="max-width:${w || 110}px;text-align:right" aria-label="${esc(st.name)}の${k}">`;
+    return `<tr>
+      <td style="font-weight:600;white-space:nowrap">${esc(st.name)}${auto ? `<div style="font-size:11px;color:var(--muted)">自動集計 ${yen(auto)}</div>` : ""}</td>
+      <td class="num">${inp("sales", man.sales)}</td>
+      <td class="num">${inp("retail", man.retail)}</td>
+      <td class="num">${inp("customers", man.customers, 76)}</td>
+      <td class="num">${inp("new", man.newCust, 76)}</td>
+      <td class="num">${inp("nom", man.nom, 76)}</td>
+      <td><input id="sp-memo-${st.id}" value="${esc(man.memo || "")}" style="min-width:120px" placeholder="メモ"></td>
+    </tr>`;
+  }).join("");
+  /* 分析: 入力または自動集計のあるスタッフ */
+  const anal = list.map(st => {
+    const man = staffStatOf(st.id, m) || {};
+    const tot = mergedStaffSales(st.id, m);
+    return { st, tot, retail: num(man.retail), cust: num(man.customers), nw: num(man.newCust), nom: num(man.nom), hasMan: !!manualStaffSales(st.id, m) };
+  }).filter(x => x.tot > 0 || x.cust > 0);
+  const sum = anal.reduce((a, x) => a + x.tot, 0);
+  const pct = (a, b) => b > 0 ? Math.round(a / b * 100) + "%" : "—";
+  const analCard = anal.length ? `<div class="card"><h2>${fmtMonth(m)}の分析</h2>
+      ${hbarHtml(anal.map(x => [x.st.name, x.tot]).sort((a, b) => b[1] - a[1]), sum, "var(--income)")}
+      <div class="twrap" style="margin-top:14px"><table>
+        <tr><th>スタッフ</th><th class="num">売上</th><th class="num">客数</th><th class="num">客単価</th><th class="num">新規率</th><th class="num">指名率</th><th class="num">店販比率</th><th class="num">歩合(参考)</th></tr>
+        ${anal.map(x => `<tr>
+          <td style="font-weight:600">${esc(x.st.name)}</td>
+          <td class="num" style="font-weight:600">${yen(x.tot)}</td>
+          <td class="num">${x.cust ? x.cust + "人" : "—"}</td>
+          <td class="num">${x.cust ? yen(Math.round(x.tot / x.cust)) : "—"}</td>
+          <td class="num">${pct(x.nw, x.cust)}</td>
+          <td class="num">${pct(x.nom, x.cust)}</td>
+          <td class="num">${pct(x.retail, x.tot)}</td>
+          <td class="num">${yen(calcPay(x.st, m).comm)}</td>
+        </tr>`).join("")}
+      </table></div>
+      <div class="hint">目安: 店販比率は8〜10%あると物販が強い店といわれます。指名率はファンの付き具合、新規率は集客の元気さ。客単価が下がっているスタッフにはメニュー提案の練習を、など打ち手につなげてください。時間あたり売上・労働分配率は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の生産性カードに自動で反映されます。</div>
+    </div>` : "";
+  /* 推移: 直近6ヶ月のスタッフ別売上 */
+  const months = lastMonths(6, m);
+  const trendRows = list.map(st => {
+    const vals = months.map(mm => mergedStaffSales(st.id, mm));
+    if(!vals.some(v => v > 0)) return "";
+    return `<tr><td style="font-weight:600;white-space:nowrap">${esc(st.name)}</td>${vals.map((v, i) => `<td class="num"${i === months.length - 1 ? ' style="font-weight:700"' : ""}>${v ? yen(v) : "—"}</td>`).join("")}</tr>`;
+  }).join("");
+  $("main").innerHTML =
+    pageHead("スタッフ実績(月次まとめ)", "月末や気が向いたときに、スタッフごとの売上・客数をまとめて入力して分析できます",
+      `${monthNav(m, "sperfNav")}<button class="btn pri" onclick="saveSperf()">保存</button>`) +
+    (list.length ? `<div class="card"><h2>${fmtMonth(m)}の実績を入力 <span class="h2-sub">全部埋めなくてOK。月の途中でも、同じ月は上書き</span></h2>
+      <div class="twrap"><table>
+        <tr><th>スタッフ</th><th class="num">技術売上(円)</th><th class="num">店販売上(円)</th><th class="num">客数</th><th class="num">うち新規</th><th class="num">指名客数</th><th>メモ</th></tr>
+        ${rows}
+      </table></div>
+      <div style="margin-top:12px"><button class="btn pri" onclick="saveSperf()">保存</button></div>
+      <div class="hint">・ここの入力は<strong>分析と歩合計算のための集計</strong>で、店の売上に二重に足されることはありません(売上そのものは収支管理・1日まとめ入力・過去実績で記録してください)。<br>
+      ・売上を入力したスタッフは、<strong>給料管理の歩合とスタッフ別売上グラフがこの数字で計算されます</strong>(未入力のスタッフはレジ・収支の担当付き記録から自動集計)。<br>
+      ・全部空にして保存すると、そのスタッフは自動集計に戻ります。</div>
+    </div>` : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`) +
+    analCard +
+    (trendRows ? `<div class="card"><h2>スタッフ別売上の推移 <span class="h2-sub">直近6ヶ月</span></h2>
+      <div class="twrap"><table>
+        <tr><th>スタッフ</th>${months.map(mm => `<th class="num">${+mm.slice(5)}月</th>`).join("")}</tr>
+        ${trendRows}
+      </table></div>
+      <div class="hint">まとめ入力した月はその値、していない月は担当付きの売上記録から自動集計した値です。</div>
+    </div>` : "");
 };
 /* ================= staff ================= */
 VIEWS.staff = function(){
