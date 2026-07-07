@@ -1877,36 +1877,48 @@ VIEWS.sperf = function(){
     </tr>`;
   }).join("");
   /* 分析: 入力または自動集計のあるスタッフ */
+  const shiftDays = (stId, mm) => new Set(S.shifts.filter(s2 => s2.staffId === stId && s2.date.startsWith(mm)).map(s2 => s2.date)).size;
+  const growth = (cur, prev) => prev > 0
+    ? `<span style="color:${cur >= prev ? "var(--good)" : "var(--crit)"};font-weight:600">${(cur >= prev ? "+" : "−") + Math.abs(Math.round((cur - prev) / prev * 100))}%</span>` : "—";
   const anal = list.map(st => {
     const man = staffStatOf(st.id, m) || {};
-    const tot = mergedStaffSales(st.id, m);
-    return { st, tot, retail: num(man.retail), cust: num(man.customers), nw: num(man.newCust), nom: num(man.nom), hasMan: !!manualStaffSales(st.id, m) };
+    const p = calcPay(st, m);
+    return { st, tot: mergedStaffSales(st.id, m),
+      prev: mergedStaffSales(st.id, addMonths(m, -1)), py: mergedStaffSales(st.id, addMonths(m, -12)),
+      days: shiftDays(st.id, m), pay: p.total, comm: p.comm,
+      retail: num(man.retail), cust: num(man.customers), nw: num(man.newCust), nom: num(man.nom) };
   }).filter(x => x.tot > 0 || x.cust > 0);
   const sum = anal.reduce((a, x) => a + x.tot, 0);
   const pct = (a, b) => b > 0 ? Math.round(a / b * 100) + "%" : "—";
   const analCard = anal.length ? `<div class="card"><h2>${fmtMonth(m)}の分析</h2>
       ${hbarHtml(anal.map(x => [x.st.name, x.tot]).sort((a, b) => b[1] - a[1]), sum, "var(--income)")}
       <div class="twrap" style="margin-top:14px"><table>
-        <tr><th>スタッフ</th><th class="num">売上</th><th class="num">客数</th><th class="num">客単価</th><th class="num">新規率</th><th class="num">指名率</th><th class="num">店販比率</th><th class="num">歩合(参考)</th></tr>
+        <tr><th>スタッフ</th><th class="num">売上</th><th class="num">前月比</th><th class="num">前年比</th><th class="num">客数</th><th class="num">客単価</th><th class="num">新規率</th><th class="num">再来率</th><th class="num">指名率</th><th class="num">店販比率</th><th class="num">1日あたり売上</th><th class="num">労働分配率</th><th class="num">歩合(参考)</th></tr>
         ${anal.map(x => `<tr>
-          <td style="font-weight:600">${esc(x.st.name)}</td>
+          <td style="font-weight:600;white-space:nowrap">${esc(x.st.name)}</td>
           <td class="num" style="font-weight:600">${yen(x.tot)}</td>
+          <td class="num">${growth(x.tot, x.prev)}</td>
+          <td class="num">${growth(x.tot, x.py)}</td>
           <td class="num">${x.cust ? x.cust + "人" : "—"}</td>
           <td class="num">${x.cust ? yen(Math.round(x.tot / x.cust)) : "—"}</td>
           <td class="num">${pct(x.nw, x.cust)}</td>
+          <td class="num">${x.cust ? pct(x.cust - x.nw, x.cust) : "—"}</td>
           <td class="num">${pct(x.nom, x.cust)}</td>
           <td class="num">${pct(x.retail, x.tot)}</td>
-          <td class="num">${yen(calcPay(x.st, m).comm)}</td>
+          <td class="num">${x.days > 0 ? yen(Math.round(x.tot / x.days)) + `<span style="color:var(--muted);font-size:11px">/${x.days}日</span>` : "—"}</td>
+          <td class="num">${x.tot > 0 && x.pay > 0 ? Math.round(x.pay / x.tot * 100) + "%" : "—"}</td>
+          <td class="num">${yen(x.comm)}</td>
         </tr>`).join("")}
       </table></div>
-      <div class="hint">目安: 店販比率は8〜10%あると物販が強い店といわれます。指名率はファンの付き具合、新規率は集客の元気さ。客単価が下がっているスタッフにはメニュー提案の練習を、など打ち手につなげてください。時間あたり売上・労働分配率は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の生産性カードに自動で反映されます。</div>
+      <div class="hint">目安: <strong>店販比率</strong>は8〜10%あると物販が強い店。<strong>指名率</strong>はファンの付き具合、<strong>新規率</strong>は集客の元気さ、<strong>再来率</strong>(100%−新規率)は常連の厚み。<strong>労働分配率</strong>(給料÷売上)は美容室では40〜60%が一般的な目安です。<strong>1日あたり売上</strong>はシフトの出勤日数から計算します(シフト未入力の月は「—」)。客単価が下がっているスタッフにはメニュー提案の練習を、など打ち手につなげてください。</div>
     </div>` : "";
-  /* 推移: 直近6ヶ月のスタッフ別売上 */
+  /* 推移: 直近6ヶ月のスタッフ別売上(店全体の売上に対する貢献度%つき) */
   const months = lastMonths(6, m);
+  const incs = months.map(mm => monthSummary(mm).inc);
   const trendRows = list.map(st => {
     const vals = months.map(mm => mergedStaffSales(st.id, mm));
     if(!vals.some(v => v > 0)) return "";
-    return `<tr><td style="font-weight:600;white-space:nowrap">${esc(st.name)}</td>${vals.map((v, i) => `<td class="num"${i === months.length - 1 ? ' style="font-weight:700"' : ""}>${v ? yen(v) : "—"}</td>`).join("")}</tr>`;
+    return `<tr><td style="font-weight:600;white-space:nowrap">${esc(st.name)}</td>${vals.map((v, i) => `<td class="num"${i === months.length - 1 ? ' style="font-weight:700"' : ""}>${v ? yen(v) + (incs[i] > 0 ? `<div style="font-size:11px;color:var(--muted)">店の${Math.min(100, Math.round(v / incs[i] * 100))}%</div>` : "") : "—"}</td>`).join("")}</tr>`;
   }).join("");
   $("main").innerHTML =
     pageHead("スタッフ実績(月次まとめ)", "月末や気が向いたときに、スタッフごとの売上・客数をまとめて入力して分析できます",
@@ -1927,7 +1939,7 @@ VIEWS.sperf = function(){
         <tr><th>スタッフ</th>${months.map(mm => `<th class="num">${+mm.slice(5)}月</th>`).join("")}</tr>
         ${trendRows}
       </table></div>
-      <div class="hint">まとめ入力した月はその値、していない月は担当付きの売上記録から自動集計した値です。</div>
+      <div class="hint">まとめ入力した月はその値、していない月は担当付きの売上記録から自動集計した値です。「店の◯%」はその月の店全体の売上に対する貢献度です(店全体の売上が記録されている月のみ表示)。</div>
     </div>` : "");
 };
 /* ================= staff ================= */
