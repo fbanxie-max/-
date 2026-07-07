@@ -280,7 +280,7 @@ const LS_KEY = "salon-mgr-v1";
   document.body.prepend(div);
 })();
 const DEFAULTS = {
-  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same", closedWd: [], closedDates: [] }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。closedWd: 定休日の曜日番号(0=日〜6=土)、closedDates: 臨時休業日['YYYY-MM-DD']。旧バックアップにはキーが無いため利用側でガードする
+  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same", closedWd: [], closedDates: [], tax: { type: "blue65", ct: "kanni", ins: 0, other: 0 } }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。closedWd: 定休日の曜日番号(0=日〜6=土)、closedDates: 臨時休業日['YYYY-MM-DD']。旧バックアップにはキーが無いため利用側でガードする
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
   tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(旧データの税区分。入力欄は廃止・CSV出力互換のため保持),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
@@ -745,6 +745,7 @@ const NAV = [
   {id:"tickets", label:"回数券"},
   {sec:"その他"},
   {id:"menus", label:"メニュー料金表"},
+  {id:"tax", label:"納税予想"},
   {id:"settings", label:"設定・バックアップ"}
 ];
 let cur = "dash";
@@ -754,6 +755,7 @@ V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
 V.closeDate = todayStr(); V.lostDays = 60; V.bulkN = 24;
 V.orderFilter = "all"; V.custSel = null; V.custQ = ""; V.chartN = 6;
+V.taxYear = +todayStr().slice(0, 4);
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
 function render(){
   $("sidebar").innerHTML =
@@ -1319,7 +1321,7 @@ function yearSummaryHtml(yr){
   if(!ytx.length) return "";
   const yInc = sumTx(ytx, "income"), yExp = sumTx(ytx, "expense");
   const expCat = groupSum(ytx.filter(t => t.type === "expense"), t => t.category || "未分類");
-  return `<div class="card"><h2>${yr}年の年間集計 <span class="h2-sub">確定申告の参考に</span></h2>
+  return `<div class="card"><h2>${yr}年の年間集計 <span class="h2-sub">確定申告の参考に</span> <button class="btn sm" onclick="V.taxYear=${+yr};go('tax')">この年の納税予想 ›</button></h2>
     <div class="hr-sub" style="margin-bottom:10px">
       <span>収入計 <strong>${yen(yInc)}</strong></span>
       <span>支出計 <strong>${yen(yExp)}</strong></span>
@@ -2629,6 +2631,144 @@ window.delMenu = function(id){
   ask("このメニューを削除しますか?(過去の記録はそのまま残ります)", () => {
     S.menus = S.menus.filter(x => x.id !== id); save(); toast("削除しました"); render();
   });
+};
+/* ================= tax estimate (納税予想) =================
+   個人事業主(美容業)向けの概算。前提は設定カードで変更できる。
+   - 事業のもうけ = アプリの利益(売上 − 経費(人件費除く) − 給料)をそのまま使う
+   - 所得税: 青色申告特別控除・社会保険料等・基礎控除58万円を引いた課税所得に累進税率、復興特別所得税2.1%込み
+   - 住民税: 基礎控除43万円・税率10% + 均等割5,000円(森林環境税含む)
+   - 個人事業税: 美容業は第3種(5%)。青色控除は適用されないため控除前の利益から事業主控除290万円を引く
+   - 消費税(簡易課税): 美容の技術売上は第5種(納付50%)、店販売上は第2種(納付20%)。売上は税込・税率10%前提
+   いずれも千円未満切捨て(課税所得)・100円未満切捨て(税額)で概算する */
+const taxCfg = () => Object.assign({ type: "blue65", ct: "kanni", ins: 0, other: 0 }, S.settings.tax || {});
+/* その年の 売上・店販売上・利益 の合計(データのある月まで) */
+function yearTaxBase(yr){
+  const cur = thisMonth();
+  let inc = 0, retail = 0, profit = 0;
+  for(let i = 1; i <= 12; i++){
+    const m = yr + "-" + String(i).padStart(2, "0");
+    if(m > cur) break; // 未来の月は月給スタッフの給料だけ乗ってしまうため含めない
+    const s = monthSummary(m);
+    inc += s.inc; retail += s.retail; profit += s.profit;
+  }
+  return { inc, retail, profit };
+}
+function calcTaxes(b, cfg){
+  const flr = (v, u) => Math.floor(Math.max(0, v) / u) * u;
+  const blue = cfg.type === "blue65" ? 650000 : cfg.type === "blue10" ? 100000 : 0;
+  const blueUsed = Math.min(blue, Math.max(0, b.profit)); // 控除は利益が上限(マイナスにはならない)
+  const biz = Math.max(0, b.profit) - blueUsed;           // 青色控除後の事業所得
+  const ded = num(cfg.ins) + num(cfg.other);
+  /* 所得税(復興特別所得税2.1%込み) */
+  const taxable = flr(biz - ded - 580000, 1000);
+  const br = [[1949000,.05,0],[3299000,.10,97500],[6949000,.20,427500],[8999000,.23,636000],[17999000,.33,1536000],[39999000,.40,2796000],[Infinity,.45,4796000]];
+  const [, rate, quick] = br.find(x => taxable <= x[0]);
+  const shotoku = flr(Math.max(0, taxable * rate - quick) * 1.021, 100);
+  /* 住民税(所得割10% + 均等割5,000円) */
+  const taxableJu = flr(biz - ded - 430000, 1000);
+  const jumin = taxableJu > 0 ? flr(taxableJu * 0.10, 100) + 5000 : 0;
+  /* 個人事業税(美容業=第3種5%、事業主控除290万円、青色控除は引かない) */
+  const jigyo = flr(Math.max(0, b.profit - 2900000) * 0.05, 100);
+  /* 消費税 */
+  let shohi = 0;
+  if(cfg.ct === "kanni"){ const svc = Math.max(0, b.inc - b.retail); shohi = svc * 10 / 110 * 0.5 + b.retail * 10 / 110 * 0.2; }
+  else if(cfg.ct === "2wari"){ shohi = b.inc * 10 / 110 * 0.2; }
+  shohi = flr(shohi, 100);
+  return { blueUsed, biz, ded, taxable, shotoku, jumin, jigyo, shohi, total: shotoku + jumin + jigyo + shohi };
+}
+window.taxNav = d => { V.taxYear += d; render(); };
+window.saveTaxCfg = function(){
+  S.settings.tax = {
+    type: $("set-tax-type").value, ct: $("set-tax-ct").value,
+    ins: Math.max(0, num($("set-tax-ins").value)), other: Math.max(0, num($("set-tax-other").value))
+  };
+  save(); toast("前提を保存し、予想額を計算し直しました"); render();
+};
+VIEWS.tax = function(){
+  const yr = V.taxYear, curYr = +todayStr().slice(0, 4);
+  const isCur = yr === curYr, cfg = taxCfg();
+  const act = yearTaxBase(yr);
+  const actT = calcTaxes(act, cfg);
+  /* 今年は「年末までこのペース」の見込みも出す(経過日数で年換算。2週間未満はブレが大きいので出さない) */
+  const doy = Math.round((new Date(curYr, +todayStr().slice(5,7) - 1, +todayStr().slice(8)) - new Date(curYr, 0, 1)) / 86400000) + 1;
+  const diy = (curYr % 4 === 0 && (curYr % 100 !== 0 || curYr % 400 === 0)) ? 366 : 365;
+  const canProj = isCur && doy >= 14 && act.inc > 0;
+  const proj = canProj ? { inc: Math.round(act.inc / doy * diy), retail: Math.round(act.retail / doy * diy), profit: Math.round(act.profit / doy * diy) } : null;
+  const projT = proj ? calcTaxes(proj, cfg) : null;
+  const typeLabel = { blue65: "青色申告(65万円控除)", blue10: "青色申告(10万円控除)", white: "白色申告" }[cfg.type];
+  const ctLabel = { kanni: "簡易課税", "2wari": "インボイス2割特例", none: "免税(納付なし)" }[cfg.ct];
+  const main = projT || actT;
+  const rows = [
+    ["所得税(復興特別所得税込み)", t => t.shotoku, "もうけから控除を引いた課税所得に5〜45%の累進税率"],
+    ["住民税", t => t.jumin, "課税所得の約10% + 均等割5,000円"],
+    ["個人事業税", t => t.jigyo, "美容業: 利益が290万円を超えた分の5%"],
+    ["消費税(" + ctLabel + ")", t => t.shohi, cfg.ct === "kanni" ? "技術売上の消費税の50%+店販の20%を納付" : cfg.ct === "2wari" ? "売上にかかる消費税の20%を納付" : "免税事業者のため納付なし"]
+  ];
+  const noData = act.inc === 0 && act.profit === 0;
+  $("main").innerHTML =
+    pageHead("納税予想(概算)", `${yr}年分 = ${yr}年1月〜12月のもうけに対する税金。納付は主に${yr + 1}年です`,
+      `<span class="mnav"><button class="btn sm" onclick="taxNav(-1)" aria-label="前年">‹</button><span class="mn-label">${yr}年分</span><button class="btn sm" onclick="taxNav(1)" ${yr >= curYr ? "disabled" : ""} aria-label="翌年">›</button></span>`) +
+    (noData ? `<div class="card"><div class="empty">${yr}年の売上・利益データがまだありません。収支を記録するか、「過去実績のまとめ入力」で月ごとの合計を入れると予想額が表示されます。</div></div>` :
+    `<div class="card hero">
+      <div class="hr-label">${yr}年分の予想納税額 合計${projT ? "(年末までこのペースの場合)" : ""}</div>
+      <div class="hr-val">${yen(main.total)}</div>
+      <div class="hr-sub">
+        ${projT ? `<span>今日までの実績だけなら <strong>${yen(actT.total)}</strong></span>` : ""}
+        <span>毎月の積立目安 <strong>${yen(Math.ceil(main.total / 12 / 1000) * 1000)}</strong></span>
+        <span>前提: ${typeLabel} ・ ${ctLabel}</span>
+      </div>
+      <div class="hint">納税資金は「毎月の積立目安」を売上から取り分けておくと、納付月に慌てません。</div>
+    </div>
+    <div class="card"><h2>税金の内訳</h2>
+      <div class="twrap"><table>
+        <tr><th>税金</th>${projT ? '<th class="num">実績(1/1〜今日)</th><th class="num">年末見込み</th>' : '<th class="num">予想額</th>'}<th>ざっくり言うと</th></tr>
+        ${rows.map(([label, f, note]) => `<tr>
+          <td style="font-weight:600;white-space:nowrap">${label}</td>
+          ${projT ? `<td class="num">${yen(f(actT))}</td><td class="num" style="font-weight:700">${yen(f(projT))}</td>` : `<td class="num" style="font-weight:700">${yen(f(actT))}</td>`}
+          <td style="color:var(--ink2);font-size:12px">${note}</td>
+        </tr>`).join("")}
+        <tr class="total"><td>合計</td>${projT ? `<td class="num">${yen(actT.total)}</td><td class="num">${yen(projT.total)}</td>` : `<td class="num">${yen(actT.total)}</td>`}<td></td></tr>
+      </table></div>
+    </div>
+    <div class="card"><h2>計算のもと(${projT ? "年末見込み" : "実績"}ベース)</h2>
+      <div class="twrap"><table style="max-width:560px">
+        <tr><td style="color:var(--muted)">年間の利益(売上−経費−給料)</td><td class="num">${yen((proj || act).profit)}</td></tr>
+        <tr><td style="color:var(--muted)">青色申告特別控除</td><td class="num">− ${yen(main.blueUsed)}</td></tr>
+        <tr><td style="color:var(--muted)">社会保険料など + その他の控除</td><td class="num">− ${yen(main.ded)}</td></tr>
+        <tr><td style="color:var(--muted)">基礎控除(誰でも引けます)</td><td class="num">− ${yen(580000)}</td></tr>
+        <tr class="total"><td>所得税の課税所得</td><td class="num">${yen(main.taxable)}</td></tr>
+      </table></div>
+      <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。</div>
+    </div>`) +
+    `<div class="card"><h2>前提の設定 <span class="h2-sub">変えるとその場で計算し直します</span></h2>
+      <div class="f-2col" style="max-width:560px">
+        <div class="f-row"><label for="set-tax-type">申告の種類</label>
+          <select id="set-tax-type">
+            <option value="blue65" ${cfg.type === "blue65" ? "selected" : ""}>青色申告(65万円控除)</option>
+            <option value="blue10" ${cfg.type === "blue10" ? "selected" : ""}>青色申告(10万円控除)</option>
+            <option value="white" ${cfg.type === "white" ? "selected" : ""}>白色申告(控除なし)</option>
+          </select></div>
+        <div class="f-row"><label for="set-tax-ct">消費税</label>
+          <select id="set-tax-ct">
+            <option value="kanni" ${cfg.ct === "kanni" ? "selected" : ""}>簡易課税で納めている</option>
+            <option value="2wari" ${cfg.ct === "2wari" ? "selected" : ""}>インボイス2割特例で納めている</option>
+            <option value="none" ${cfg.ct === "none" ? "selected" : ""}>納めていない(免税)</option>
+          </select></div>
+        <div class="f-row"><label for="set-tax-ins">国民健康保険・国民年金など 年間の支払額(概算・円)</label>
+          <input id="set-tax-ins" type="number" inputmode="numeric" min="0" step="10000" value="${num(cfg.ins) > 0 ? num(cfg.ins) : ""}" placeholder="例: 800000"></div>
+        <div class="f-row"><label for="set-tax-other">その他の控除 年間合計(任意・円)</label>
+          <input id="set-tax-other" type="number" inputmode="numeric" min="0" step="10000" value="${num(cfg.other) > 0 ? num(cfg.other) : ""}" placeholder="生命保険料・扶養・小規模企業共済など"></div>
+      </div>
+      <button class="btn pri" onclick="saveTaxCfg()">保存して計算し直す</button>
+      <div class="hint">国保・年金の年間額は、納付書や口座の引き落とし履歴のだいたいの合計でOKです。iDeCo・小規模企業共済・生命保険料控除・扶養控除などがあれば「その他の控除」にまとめて入れてください。</div>
+    </div>
+    <div class="card"><h2>いつ・どうやって納める?(${yr}年分の場合)</h2>
+      <div class="alertline"><span class="chip info">所得税</span>${yr + 1}年3月15日までに確定申告して納付(口座振替なら4月)</div>
+      <div class="alertline"><span class="chip info">消費税</span>${yr + 1}年3月31日までに申告・納付</div>
+      <div class="alertline"><span class="chip info">住民税</span>${yr + 1}年6月から年4回に分けて納付(納付書が届きます)</div>
+      <div class="alertline"><span class="chip info">個人事業税</span>${yr + 1}年8月と11月の2回(利益290万円以下なら請求されません)</div>
+    </div>
+    <div class="hint">※ この金額は帳簿上の利益から機械的に計算した<strong>概算の目安</strong>です(基礎控除58万円など${curYr}年時点の税制で計算)。扶養の状況・各種控除・売上の税率区分などで実際の税額は変わります。申告時は税務署の案内や税理士さんにご確認ください。</div>`;
 };
 /* ================= settings ================= */
 VIEWS.settings = function(){
