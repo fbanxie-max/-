@@ -966,7 +966,7 @@ VIEWS.dash = function(){
   const hasData = S.tx.length > 0;
   $("main").innerHTML =
     pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
-      `<button class="btn pri" onclick="openDailySale()">+ 1日の売上まとめ</button><button class="btn" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="addTx('expense')">+ 支出を記録</button><button class="btn" onclick="openReport()">月次レポート</button>`) +
+      `<button class="btn pri" onclick="openDailySale()">+ 1日の売上まとめ</button><button class="btn" onclick="openDailyExp()">+ 1日の経費まとめ</button><button class="btn" onclick="addTx('income')">+ 売上を記録</button><button class="btn" onclick="openReport()">月次レポート</button>`) +
     setupGuideHtml() +
     heroHtml() +
     (S.menus.length ? `<div class="card"><h2>クイック会計 <span class="h2-sub">タップで今日の売上を記録</span></h2>
@@ -996,7 +996,7 @@ VIEWS.dash = function(){
             <td><button class="btn sm ghost" onclick="event.stopPropagation();openDailySale('${d}')">入力</button></td>
           </tr>`; }).join("")}
       </table></div>
-      <div class="hint">「入力」でその日の技術売上・店販売上をまとめて記入できます(同じ日は上書き)。1件ずつの記録(レジ・クイック会計)と併用もできます。</div>
+            <div class="hint">「入力」でその日の技術売上・店販売上をまとめて記入できます(同じ日は上書き)。経費は「+ 1日の経費まとめ」で合計額だけ入れればOK(勘定科目なし・同じ日は上書き)。1件ずつの記録(レジ・タップ会計・収支管理)と併用もできます。</div>
     </div>
     <div class="grid2" style="margin-bottom:16px">
       <div class="card"><h2>今日の予約 <span class="h2-sub">${apptsToday.length}件</span></h2>
@@ -1475,6 +1475,26 @@ window.openDailySale = function(date){
       save(); toast(changed ? `${fmtDate(v.date)}の売上まとめを保存しました` : `${fmtDate(v.date)}のまとめ入力を削除しました`); render();
     } });
 };
+/* ---- 1日の経費まとめ入力 ----
+   勘定科目なしで、その日の経費の合計額を1件だけ記録する(同じ日は上書き)。
+   カテゴリは「経費まとめ」固定。dailyExpフラグで管理し、編集はこのフォームに戻す */
+window.openDailyExp = function(date){
+  const d = date || todayStr();
+  const ex = S.tx.filter(t => t.dailyExp && t.type === "expense" && t.date === d);
+  const cur = { date: d, amount: ex.reduce((a, t) => a + num(t.amount), 0) || "", memo: (ex.length && ex[0].memo !== "1日の経費まとめ") ? ex[0].memo : "" };
+  openForm({ title: "1日の経費まとめ入力", data: cur, saveLabel: "保存(同じ日は上書き)",
+    fields: [
+      {key:"date", label:"日付", type:"date", value: d, required:true, half:true},
+      {key:"amount", label:"経費の合計(円)", type:"number", min:0, half:true},
+      {key:"memo", label:"メモ(任意・何に使ったかざっくり)", type:"text", placeholder:"例: 材料仕入と消耗品"}
+    ],
+    onsave: v => {
+      const val = Math.max(0, num(v.amount));
+      S.tx = S.tx.filter(t => !(t.dailyExp && t.type === "expense" && t.date === v.date));
+      if(val > 0) S.tx.push({id: uid(), dailyExp: true, type: "expense", date: v.date, category: "経費まとめ", amount: val, memo: v.memo || "1日の経費まとめ", staffId: ""});
+      save(); toast(val > 0 ? `${fmtDate(v.date)}の経費 ${yen(val)} を保存しました(同じ日は上書き)` : `${fmtDate(v.date)}の経費まとめを削除しました`); render();
+    } });
+};
 window.addTx = function(type){
   openForm({ title: type === "income" ? "収入を記録" : "支出を記録", fields: txFields(type),
     onsave: v => {
@@ -1487,6 +1507,7 @@ window.addTx = function(type){
 window.editTx = function(id){
   const t = S.tx.find(x => x.id === id); if(!t) return;
   if(t.daily && t.type === "income"){ openDailySale(t.date); return; } // 日計まとめはまとめフォームで編集
+  if(t.dailyExp){ openDailyExp(t.date); return; } // 1日の経費まとめも同様
   openForm({ title:"記録を編集", fields: txFields(t.type), data: t,
     onsave: v => {
       if(t.type === "income") v.category = menuCat(v.category);
@@ -2926,6 +2947,7 @@ VIEWS.expbulk = function(){
       <div style="margin-top:12px"><button class="btn pri" onclick="saveExpBulk()">まとめて保存</button></div>
       <div class="hint">・利益・納税予想は月の合計で計算するため、<strong>この入れ方でも数字の正確さは落ちません</strong>。カテゴリが分からない少額のものは「雑費」でまとめてOKです。<br>
       ・「1件ずつ入力済み」の列は、+支出・領収書管理・定期支出・発注などからすでに入っている分です(この画面の入力とは<strong>別に集計される</strong>ので、同じ領収書を両方に入れないようにしてください)。家賃・リース料など毎月同じものは<a href="javascript:void(0)" onclick="go('money')" style="color:var(--info)">定期支出</a>の自動計上が便利です。<br>
+      ・もっと簡単でよければ、ダッシュボードの<strong>「+ 1日の経費まとめ」</strong>(勘定科目なし・日付と合計だけ)も使えます。同じ領収書をこの画面と両方に入れないようにだけご注意ください。<br>
       ・記録は「毎月15日・◯◯カテゴリ・経費まとめ入力」として保存されます。<strong>領収書の現物は法律で保存が必要</strong>なので、月ごとに封筒にまとめて取っておいてください。</div>
     </div>`;
 };
