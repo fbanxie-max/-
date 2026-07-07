@@ -395,7 +395,15 @@ const $ = id => document.getElementById(id);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const yen = n => { const v = Math.round(n || 0); return (v < 0 ? "−" : "") + "¥" + Math.abs(v).toLocaleString("ja-JP"); };
-const num = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+/* 数値化。全角数字(９５)・カンマ(1,200)・空白入りでも正しく読む(iPadの日本語キーボード対策) */
+const num = v => {
+  if(typeof v === "number") return isNaN(v) ? 0 : v;
+  const t = String(v ?? "")
+    .replace(/[０-９．－]/g, c => "0123456789.-"["０１２３４５６７８９．－".indexOf(c)])
+    .replace(/[,，\s]/g, "");
+  const n = parseFloat(t);
+  return isNaN(n) ? 0 : n;
+};
 const todayStr = () => { const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
 const thisMonth = () => todayStr().slice(0,7);
 const WD = ["日","月","火","水","木","金","土"];
@@ -1865,7 +1873,8 @@ VIEWS.sperf = function(){
   const rows = list.map(st => {
     const man = staffStatOf(st.id, m) || {};
     const auto = txStaffSales(st.id, m);
-    const inp = (k, val, w) => `<input id="sp-${k}-${st.id}" type="number" inputmode="numeric" min="0" value="${num(val) > 0 ? num(val) : ""}" style="max-width:${w || 110}px;text-align:right" aria-label="${esc(st.name)}の${k}">`;
+    /* type=numberだと全角数字がブラウザに無効化されて消えるため、textで受けて保存時に正規化する */
+    const inp = (k, val, w) => `<input id="sp-${k}-${st.id}" type="text" inputmode="numeric" value="${num(val) > 0 ? num(val) : ""}" style="max-width:${w || 110}px;text-align:right" aria-label="${esc(st.name)}の${k}">`;
     return `<tr>
       <td style="font-weight:600;white-space:nowrap">${esc(st.name)}${auto ? `<div style="font-size:11px;color:var(--muted)">自動集計 ${yen(auto)}</div>` : ""}</td>
       <td class="num">${inp("sales", man.sales)}</td>
@@ -1950,8 +1959,9 @@ VIEWS.staff = function(){
     pageHead("スタッフ登録", "シフト・給料計算の基礎になる情報です",
       `<button class="btn pri" onclick="addStaff()">+ スタッフを追加</button>`) +
     `<div class="card"><div class="twrap">${S.staff.length ? `<table>
-      <tr><th>名前</th><th>役職</th><th>状態</th><th>給与形態</th><th class="num">基本額</th><th class="num">歩合率</th><th></th></tr>
-      ${S.staff.map(st => `<tr${st.retireM ? ' style="opacity:.65"' : ""}>
+      <tr><th style="width:76px">並び順</th><th>名前</th><th>役職</th><th>状態</th><th>給与形態</th><th class="num">基本額</th><th class="num">歩合率</th><th></th></tr>
+      ${S.staff.map((st, i) => `<tr${st.retireM ? ' style="opacity:.65"' : ""}>
+        <td style="white-space:nowrap"><button class="btn sm ghost" onclick="moveStaff('${st.id}',-1)" ${i === 0 ? "disabled" : ""} aria-label="上へ">↑</button><button class="btn sm ghost" onclick="moveStaff('${st.id}',1)" ${i === S.staff.length - 1 ? "disabled" : ""} aria-label="下へ">↓</button></td>
         <td style="font-weight:600">${esc(st.name)}${st.owner === "1" ? ' <span class="chip info">事業主</span>' : st.owner === "family" ? ' <span class="chip mut">家族(専従者)</span>' : ""}</td>
         <td>${esc(st.role)}</td>
         <td style="white-space:nowrap">${st.retireM ? `<span class="chip mut">退社(${fmtMonth(st.retireM)}まで)</span>` : '<span class="chip good">在籍</span>'}</td>
@@ -1960,7 +1970,7 @@ VIEWS.staff = function(){
         <td class="num">${num(st.commission)}%</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editStaff('${st.id}')">編集</button><button class="btn sm ghost" onclick="delStaff('${st.id}')">削除</button></td>
       </tr>`).join("")}</table>` : `<div class="empty">スタッフが未登録です。「+ スタッフを追加」から登録してください。</div>`}</div>
-    <div class="hint">あなた自身の給料もここで管理している場合は、区分を<strong>「事業主本人」</strong>にしてください。事業主の給料は経費ではなく「利益からの受け取り(事業主貸)」として扱われ、利益・支出・納税予想のすべてが正しく計算されます。<strong>家族に給料を払っている場合は「家族従業員(専従者)」</strong>にしてください。家族の給料は「青色事業専従者給与の届出」を税務署に出した範囲内でのみ経費になり、届出をした家族は配偶者控除・扶養控除の対象外、雇用保険の対象外です。従業員を1人でも雇うと労災保険は加入義務、週20時間以上なら雇用保険も義務です。退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
+    <div class="hint">「↑↓」で表示の並び順を変えられます(シフト・給料管理・スタッフ実績にも同じ順で反映)。あなた自身の給料もここで管理している場合は、区分を<strong>「事業主本人」</strong>にしてください。事業主の給料は経費ではなく「利益からの受け取り(事業主貸)」として扱われ、利益・支出・納税予想のすべてが正しく計算されます。<strong>家族に給料を払っている場合は「家族従業員(専従者)」</strong>にしてください。家族の給料は「青色事業専従者給与の届出」を税務署に出した範囲内でのみ経費になり、届出をした家族は配偶者控除・扶養控除の対象外、雇用保険の対象外です。従業員を1人でも雇うと労災保険は加入義務、週20時間以上なら雇用保険も義務です。退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
 };
 function staffFields(){
   return [
@@ -1997,6 +2007,14 @@ window.editStaff = function(id){
       }
       Object.assign(st, v); save(); toast(msg); render();
     } });
+};
+/* スタッフの並び替え。この順番がシフト・給料管理・スタッフ実績・担当の選択肢すべてに反映される */
+window.moveStaff = function(id, dir){
+  const i = S.staff.findIndex(st => st.id === id);
+  const j = i + dir;
+  if(i < 0 || j < 0 || j >= S.staff.length) return;
+  [S.staff[i], S.staff[j]] = [S.staff[j], S.staff[i]];
+  save(); render();
 };
 window.delStaff = function(id){
   ask("このスタッフを削除しますか?(シフト・給与の記録も表示されなくなります。賃金台帳は法律で3年間の保存義務があるため、退社したスタッフは削除せず「退社月」の設定をおすすめします)", () => {
