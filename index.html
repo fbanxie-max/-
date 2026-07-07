@@ -2679,15 +2679,12 @@ function yearTaxBase(yr){
   }
   return { inc, retail, profit };
 }
-function calcTaxes(b, cfg, yr){
+/* 所得税+住民税の共通計算(個人事業主の事業所得にも、法人の役員報酬にも使う)。
+   base = 控除前の所得、ded = 所得控除の合計(基礎控除は含まない)、jutaku = 住宅ローン控除(税額控除) */
+function personalTaxes(base, ded, jutaku){
   const flr = (v, u) => Math.floor(Math.max(0, v) / u) * u;
-  const blue = cfg.type === "blue65" ? 650000 : cfg.type === "blue10" ? 100000 : 0;
-  const blueUsed = Math.min(blue, Math.max(0, b.profit)); // 控除は利益が上限(マイナスにはならない)
-  const biz = Math.max(0, b.profit) - blueUsed;           // 青色控除後の事業所得
-  const ded = dedTotal(cfg);
-  const jutaku = Math.max(0, num((cfg.deds || {}).jutaku)); // 住宅ローン控除(税額控除: 税金そのものから引く)
   /* 所得税: 課税所得 × 累進税率 − 住宅ローン控除、残りに復興特別所得税2.1% */
-  const taxable = flr(biz - ded - 580000, 1000);
+  const taxable = flr(base - ded - 580000, 1000);
   const br = [[1949000,.05,0],[3299000,.10,97500],[6949000,.20,427500],[8999000,.23,636000],[17999000,.33,1536000],[39999000,.40,2796000],[Infinity,.45,4796000]];
   const [, rate, quick] = br.find(x => taxable <= x[0]);
   let itBase = Math.max(0, taxable * rate - quick);
@@ -2695,11 +2692,21 @@ function calcTaxes(b, cfg, yr){
   itBase -= jtIT;
   const shotoku = flr(itBase * 1.021, 100);
   /* 住民税(所得割10% + 均等割5,000円)。住宅ローン控除の引き切れない分は最大97,500円まで住民税からも引ける */
-  const taxableJu = flr(biz - ded - 430000, 1000);
+  const taxableJu = flr(base - ded - 430000, 1000);
   let juIncome = taxableJu > 0 ? flr(taxableJu * 0.10, 100) : 0;
   const jtJu = Math.min(Math.max(0, jutaku - jtIT), 97500, juIncome);
   juIncome -= jtJu;
   const jumin = taxableJu > 0 ? juIncome + 5000 : 0;
+  return { taxable, shotoku, jumin, jutakuUsed: jtIT + jtJu };
+}
+function calcTaxes(b, cfg, yr){
+  const flr = (v, u) => Math.floor(Math.max(0, v) / u) * u;
+  const blue = cfg.type === "blue65" ? 650000 : cfg.type === "blue10" ? 100000 : 0;
+  const blueUsed = Math.min(blue, Math.max(0, b.profit)); // 控除は利益が上限(マイナスにはならない)
+  const biz = Math.max(0, b.profit) - blueUsed;           // 青色控除後の事業所得
+  const ded = dedTotal(cfg);
+  const jutaku = Math.max(0, num((cfg.deds || {}).jutaku)); // 住宅ローン控除(税額控除: 税金そのものから引く)
+  const p = personalTaxes(biz, ded, jutaku);
   /* 個人事業税(美容業=第3種5%、事業主控除290万円、青色控除は引かない) */
   const jigyo = flr(Math.max(0, b.profit - 2900000) * 0.05, 100);
   /* 消費税(開業からの免税期間は納付なし) */
@@ -2710,7 +2717,80 @@ function calcTaxes(b, cfg, yr){
     else if(cfg.ct === "2wari"){ shohi = b.inc * 10 / 110 * 0.2; }
     shohi = flr(shohi, 100);
   }
-  return { blueUsed, biz, ded, jutakuUsed: jtIT + jtJu, taxable, shotoku, jumin, jigyo, shohi, exempt, total: shotoku + jumin + jigyo + shohi };
+  return { blueUsed, biz, ded, jutakuUsed: p.jutakuUsed, taxable: p.taxable, shotoku: p.shotoku, jumin: p.jumin, jigyo, shohi, exempt, total: p.shotoku + p.jumin + jigyo + shohi };
+}
+/* ---- 法人にした場合の比較(概算) ----
+   中小法人(資本金1億円以下)・協会けんぽ加入・役員1名(本人)を想定。
+   - 会社の利益 = 事業の利益 − 役員報酬 − 社会保険の会社負担分
+   - 法人側の税金: 法人税(800万円以下15%/超23.2%)+地方法人税(法人税×10.3%)
+     +法人住民税(法人税×約7%+均等割7万円)+法人事業税(3.5〜7%)+特別法人事業税(事業税×37%)
+   - 個人側: 役員報酬に給与所得控除(最低65万円)を適用して所得税・住民税
+   - 社会保険: 健康保険約11.5%+厚生年金18.3%を会社と本人で折半(標準報酬の上限を考慮)
+   - 消費税は比較に含めない(新設法人は条件を満たせば約2年免税のため) */
+function corpCompare(profit, cfg){
+  const moAuto = Math.max(100000, Math.floor(Math.max(0, profit) / 2 / 12 / 10000) * 10000);
+  const mo = num(cfg.corpY) > 0 ? num(cfg.corpY) : moAuto;
+  const Y = mo * 12;
+  const shahoTotal = Math.round(12 * (Math.min(mo, 650000) * 0.183 + Math.min(mo, 1390000) * 0.115));
+  const shahoHalf = Math.round(shahoTotal / 2);
+  const C = profit - Y - shahoHalf; // 会社に残る利益(役員報酬と会社負担の社保を経費にした後)
+  let corpTax = 70000; // 法人住民税の均等割(赤字でもかかる)
+  if(C > 0){
+    const hojin = Math.min(C, 8e6) * 0.15 + Math.max(0, C - 8e6) * 0.232;
+    const jigyo = Math.min(C, 4e6) * 0.035 + Math.min(Math.max(C - 4e6, 0), 4e6) * 0.053 + Math.max(0, C - 8e6) * 0.07;
+    corpTax += hojin * 1.103 + hojin * 0.07 + jigyo * 1.37;
+  }
+  corpTax = Math.floor(corpTax / 100) * 100;
+  /* 役員個人: 給与所得控除(2025年改正: 最低65万円)後に所得税・住民税。
+     国保・年金(社会保険料控除の入力値)は厚生年金・健康保険に置き換わるため除外し、本人負担分の社保を控除する */
+  const kyuyoDed = Y <= 1900000 ? Math.max(650000, Y * 0.4 - 100000)
+    : Y <= 3600000 ? Y * 0.3 + 80000
+    : Y <= 6600000 ? Y * 0.2 + 440000
+    : Y <= 8500000 ? Y * 0.1 + 1100000 : 1950000;
+  const dedEx = dedTotal(cfg) - Math.max(0, num((cfg.deds || {}).shakai));
+  const jutaku = Math.max(0, num((cfg.deds || {}).jutaku));
+  const p = personalTaxes(Y - kyuyoDed, shahoHalf + dedEx, jutaku);
+  return { mo, moAuto, Y, C, corpTax, shahoTotal, shahoHalf, personal: p, total: corpTax + p.shotoku + p.jumin + shahoTotal };
+}
+window.saveCorpY = function(){
+  const t = taxCfg();
+  t.corpY = Math.max(0, num($("corp-mo").value));
+  delete t.ins; delete t.other; // 旧形式のキーは掃除(taxCfgでdedsへ引き継ぎ済み)
+  S.settings.tax = t;
+  save(); toast("役員報酬を変えて計算し直しました"); render();
+};
+/* 個人事業主のまま vs 法人化 の比較カード。t = 個人側の税額計算結果 */
+function corpCompareCardHtml(profit, t, cfg, isProj){
+  const cc = corpCompare(profit, cfg);
+  const shakaiIn = Math.max(0, num((cfg.deds || {}).shakai));
+  const indiv = t.shotoku + t.jumin + t.jigyo + shakaiIn;
+  const diff = indiv - cc.total;
+  const verdict = Math.abs(diff) < 50000
+    ? `<span class="chip mut">ほぼ同じ(差 ${yen(Math.abs(diff))})</span> 固定コストを考えると個人のままが無難な水準です`
+    : diff > 0
+    ? `<span class="chip good">法人のほうが年 ${yen(diff)} 軽い(概算)</span> ただし下の注意にある固定コストを引いて考えてください`
+    : `<span class="chip info">個人のままのほうが年 ${yen(-diff)} 軽い(概算)</span>`;
+  return `<div class="card"><h2>法人にした場合との比較 <span class="h2-sub">概算 ・ ${isProj ? "年末見込み" : "実績"}の利益 ${yen(profit)} で計算</span></h2>
+    <div class="f-2col" style="max-width:560px;align-items:end">
+      <div class="f-row"><label for="corp-mo">役員報酬(法人にした場合の自分の給料)月額</label>
+        <input id="corp-mo" type="number" inputmode="numeric" min="0" step="10000" value="${num(cfg.corpY) > 0 ? num(cfg.corpY) : ""}" placeholder="空欄なら利益の半分(月${yen(cc.moAuto)})で計算"></div>
+      <div class="f-row"><label>&nbsp;</label><button class="btn" onclick="saveCorpY()">この報酬で計算し直す</button></div>
+    </div>
+    <div class="twrap"><table>
+      <tr><th>負担の内訳</th><th class="num">今のまま(個人事業主)</th><th class="num">法人にした場合<div style="font-weight:400">(役員報酬 月${yen(cc.mo)})</div></th></tr>
+      <tr><td style="color:var(--muted)">自分にかかる所得税+住民税</td><td class="num">${yen(t.shotoku + t.jumin)}</td><td class="num">${yen(cc.personal.shotoku + cc.personal.jumin)}</td></tr>
+      <tr><td style="color:var(--muted)">個人事業税</td><td class="num">${yen(t.jigyo)}</td><td class="num">—</td></tr>
+      <tr><td style="color:var(--muted)">会社にかかる税金(法人税など)</td><td class="num">—</td><td class="num">${yen(cc.corpTax)}${cc.C <= 0 ? '<div style="font-size:11px;color:var(--crit)">会社は赤字(それでも均等割7万円)</div>' : ""}</td></tr>
+      <tr><td style="color:var(--muted)">社会保険</td><td class="num">${shakaiIn ? yen(shakaiIn) + '<div style="font-size:11px;color:var(--muted)">国保・年金(入力額)</div>' : '<span style="color:var(--crit);font-size:12px">未入力</span>'}</td><td class="num">${yen(cc.shahoTotal)}<div style="font-size:11px;color:var(--muted)">厚生年金・健保(会社+本人)</div></td></tr>
+      <tr class="total"><td>税金+社会保険の合計負担</td><td class="num" style="font-size:15px">${yen(indiv)}</td><td class="num" style="font-size:15px">${yen(cc.total)}</td></tr>
+    </table></div>
+    <div style="margin-top:10px;font-size:13.5px">${verdict}</div>
+    <div class="hint">・役員報酬は原則、事業年度の途中で変えられません(毎月同額)。金額を変えて何パターンか試してみてください。<br>
+    ・${shakaiIn ? "" : "<strong>個人側の国保・年金が未入力です。</strong>下の「前提の設定」で入力すると公平な比較になります。<br>・"}この表に<strong>税理士費用(年20〜40万円ほど)・登記費用・事務負担の増加</strong>は含まれていません。差額がこれより小さいうちは急がなくてよい水準です。<br>
+    ・厚生年金は国保・年金より高い代わりに、将来の年金額が増える・扶養家族の保険料が不要になるなどの利点もあります。<br>
+    ・消費税はどちらにも含めていません(新しく作った法人は条件を満たせば約2年免税。個人のままなら課税開始年から納付)。<br>
+    ・法人化は影響が大きいため、実行前に必ず税理士さんにご相談ください。</div>
+  </div>`;
 }
 window.taxNav = d => { V.taxYear += d; render(); };
 window.saveTaxCfg = function(){
@@ -2719,7 +2799,8 @@ window.saveTaxCfg = function(){
   const jt = Math.max(0, num($("ded-jutaku").value)); if(jt) deds.jutaku = jt;
   S.settings.tax = {
     type: $("set-tax-type").value, ct: $("set-tax-ct").value,
-    ctFrom: Math.max(0, num($("set-tax-from").value)), deds
+    ctFrom: Math.max(0, num($("set-tax-from").value)), deds,
+    corpY: Math.max(0, num(taxCfg().corpY)) // 法人比較の役員報酬設定は維持する
   };
   save(); toast("前提を保存し、予想額を計算し直しました"); render();
 };
@@ -2784,7 +2865,7 @@ VIEWS.tax = function(){
         <tr class="total"><td>所得税の課税所得</td><td class="num">${yen(main.taxable)}</td></tr>
       </table></div>
       <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。${main.jutakuUsed ? `<br>住宅ローン控除 <strong>${yen(main.jutakuUsed)}</strong> は課税所得からではなく、<strong>税額そのもの</strong>(所得税、引き切れない分は住民税から最大97,500円)から差し引いています。` : ""}</div>
-    </div>`) +
+    </div>` + corpCompareCardHtml((proj || act).profit, main, cfg, !!projT)) +
     `<div class="card"><h2>前提の設定 <span class="h2-sub">変えて「保存」するとその場で計算し直します</span></h2>
       <div class="f-2col" style="max-width:640px">
         <div class="f-row"><label for="set-tax-type">申告の種類</label>
