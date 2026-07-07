@@ -344,9 +344,12 @@ function normalizeState(d){
   for(const k of ["payAdj","closings"]) if(!s[k] || typeof s[k] !== "object") s[k] = {};
   s.settings = Object.assign(structuredClone(DEFAULTS.settings), (d && d.settings) || {});
   s.customers.forEach(c => { if(!Array.isArray(c.visits)) c.visits = []; });
+  const ownerIds = new Set(s.staff.filter(st => st.owner === "1").map(st => st.id));
   s.tx.forEach(t => {
     /* 旧バージョンで「支出に計上」した給与に印を付け直す(利益・納税予想の二重引き防止に使用) */
     if(t.type === "expense" && t.category === "人件費" && t.staffId && /分給与$/.test(t.memo || "") && t.payrollBooked === undefined) t.payrollBooked = true;
+    /* 事業主本人の給与計上は「事業主貸(経費外の受け取り記録)」へ変換する。事業主の給料は経費・支出ではなく利益の取り分のため */
+    if(t.type === "expense" && t.payrollBooked && t.staffId && ownerIds.has(t.staffId) && !t.ownerDraw){ t.ownerDraw = true; t.category = "事業主貸"; }
     /* 旧バージョンの「1日まとめ入力」(技術+店販の2件)を1会計として数えるようにする */
     if(t.daily && !t.saleId) t.saleId = "daily-" + t.date;
   });
@@ -534,7 +537,8 @@ function dlCSV(name, rows){
 }
 /* ================= aggregation ================= */
 const txInMonth = m => S.tx.filter(t => t.date && t.date.startsWith(m));
-const sumTx = (list, type) => list.filter(t => t.type === type).reduce((a,t) => a + num(t.amount), 0);
+/* 事業主貸(ownerDraw: 事業主本人の給料の受け取り記録)は経費ではないため、支出の集計から除外する */
+const sumTx = (list, type) => list.filter(t => t.type === type && !t.ownerDraw).reduce((a,t) => a + num(t.amount), 0);
 function daysInMonth(m){ const [y,mo] = m.split("-").map(Number); return new Date(y, mo, 0).getDate(); }
 /* 会計単位のキー: 複数メニュー会計(来店処理)は同じsaleIdを共有する。旧データ(saleIdなし)は1行=1会計 */
 const saleKey = t => t.saleId || t.id;
@@ -554,9 +558,13 @@ function monthSummary(m){
   const pay = payrollTotalFor(m);
   return { inc, exp, pay, profit: inc - expOther - pay, mat, retail, count, avg: count ? Math.round(inc / count) : 0 };
 }
-/* その月分の給与(支給額)の合計。在籍スタッフのみ。基本給は自動計算なので毎月何もしなくても反映される */
+/* その月分の給与(支給額)の合計。在籍する従業員のみ(事業主本人の給料は経費ではなく利益の取り分のため含めない) */
 function payrollTotalFor(m){
-  return S.staff.filter(st => staffActiveIn(st, m)).reduce((a, st) => a + calcPay(st, m).total, 0);
+  return S.staff.filter(st => staffActiveIn(st, m) && st.owner !== "1").reduce((a, st) => a + calcPay(st, m).total, 0);
+}
+/* 事業主本人のその月分の給料(=利益の中から受け取る額。参考表示用) */
+function ownerPayFor(m){
+  return S.staff.filter(st => staffActiveIn(st, m) && st.owner === "1").reduce((a, st) => a + calcPay(st, m).total, 0);
 }
 /* 顧客カルテから当月来店客の新規/再来を判定(顧客単位。全来店のうち最古の日付が当月なら新規) */
 function visitStats(m){
@@ -695,7 +703,7 @@ function breakdownCardsHtml(m, full = true){ // full=false: 顧客分析(リピ�
   const s = monthSummary(m);
   const staffE = staffSalesEntries(m);
   const menuE = topN(groupSum(txInMonth(m).filter(t => t.type === "income"), t => t.category || "未分類"), 7);
-  const expE = topN(groupSum(txInMonth(m).filter(t => t.type === "expense"), t => t.category || "未分類"), 5);
+  const expE = topN(groupSum(txInMonth(m).filter(t => t.type === "expense" && !t.ownerDraw), t => t.category || "未分類"), 5);
   const vs = visitStats(m);
   const seen = vs.nw + vs.rep;
   const as = apptStats(m);
@@ -941,7 +949,7 @@ VIEWS.dash = function(){
       <div class="tile"><div class="t-label">今日の売上</div><div class="t-val">${yen(incToday)}</div><div class="t-note">${custToday}件${apptsToday.length ? ` ・ 予約あと${apptsToday.length}件` : ""}</div></div>
       <div class="tile"><div class="t-label">昨日の売上</div><div class="t-val">${yen(incYday)}</div><div class="t-note">${cntYday}件</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
-      <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
+      <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−従業員給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
     </div>
     <div class="card"><h2>日別売上 <span class="h2-sub">直近7日 ・ 行をタップでその日のレジ締めへ</span></h2>
       <div class="twrap"><table>
@@ -1099,7 +1107,7 @@ VIEWS.report = function(){
     `<div class="tiles">
       <div class="tile"><div class="t-label">売上</div><div class="t-val">${yen(s.inc)}</div><div class="t-note">${mom}${yoy}</div></div>
       <div class="tile"><div class="t-label">支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
-      <div class="tile"><div class="t-label">利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
+      <div class="tile"><div class="t-label">利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−従業員給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
       <div class="tile"><div class="t-label">客単価</div><div class="t-val">${yen(s.avg)}</div><div class="t-note">収入1件あたり・店販含む</div></div>
       <div class="tile"><div class="t-label">来店客数</div><div class="t-val">${s.count}件</div><div class="t-note">${vs.nw + vs.rep ? `カルテ 新規${vs.nw}・再来${vs.rep}` : "カルテ記録なし"}</div></div>
     </div>` +
@@ -1135,7 +1143,7 @@ window.copyReport = function(){
   if(staffE.length) lines.push("■スタッフ別売上", ...staffE.map(fmtE), "");
   const menuE = topN(groupSum(txInMonth(m).filter(t => t.type === "income"), t => t.category || "未分類"), 7);
   if(menuE.length) lines.push("■メニュー別構成", ...menuE.map(fmtE), "");
-  const expE = topN(groupSum(txInMonth(m).filter(t => t.type === "expense"), t => t.category || "未分類"), 5);
+  const expE = topN(groupSum(txInMonth(m).filter(t => t.type === "expense" && !t.ownerDraw), t => t.category || "未分類"), 5);
   if(expE.length) lines.push("■支出内訳", ...expE.map(fmtE), "");
   if(s.inc > 0) lines.push(`店販比率 ${Math.round(s.retail / s.inc * 100)}% / リピート率 ${vs.nw + vs.rep ? Math.round(vs.rep / (vs.nw + vs.rep) * 100) + "%(カルテ 新規" + vs.nw + "・再来" + vs.rep + ")" : "—(カルテ記録なし)"}`);
   copyText(lines.join("\n").replace(/\n+$/, ""));
@@ -1168,7 +1176,7 @@ function dailyRows(m){
     if(!list.length && !c) continue;
     const incL = list.filter(t => t.type === "income");
     const inc = incL.reduce((a,t) => a + num(t.amount), 0);
-    const exp = list.filter(t => t.type === "expense").reduce((a,t) => a + num(t.amount), 0);
+    const exp = list.filter(t => t.type === "expense" && !t.ownerDraw).reduce((a,t) => a + num(t.amount), 0);
     const cash = incL.filter(t => !t.pay || t.pay === "現金").reduce((a,t) => a + num(t.amount), 0);
     const diff = c && c.closed ? num(c.actual) - (num(c.float) + cash) : null;
     rows.push({ d, inc, count: salesCount(incL), exp, closed: !!(c && c.closed), diff, memo: (c && c.memo) || "" });
@@ -1220,7 +1228,7 @@ VIEWS.reports = function(){
             ${target > 0 ? `<td class="num">${targetFor(mm) > 0 ? Math.round(s.inc / targetFor(mm) * 100) + "%" : "—"}</td>` : ""}
             <td><button class="btn sm ghost" onclick="event.stopPropagation();openMonthReport('${mm}')">月次レポート ›</button></td>
           </tr>`; }).join("")}</table>` : `<div class="empty">まだ記録がありません</div>`}</div>
-      <div class="hint">行をタップするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。利益は「売上 − 経費(計上済み給与を除く) − その月分の給料」で、スタッフの基本給・歩合は毎月自動で反映されます(給料管理で内訳を確認できます)。</div>
+      <div class="hint">行をタップするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。利益は「売上 − 経費 − その月分の従業員給料」で、基本給・歩合は毎月自動で反映されます(給料管理で内訳を確認できます)。事業主本人の給料は経費にせず利益に含めます。</div>
     </div>` +
     yoyCardHtml(m.slice(0, 4)) +
     trendCardsHtml();
@@ -1297,7 +1305,7 @@ VIEWS.money = function(){
     return `<tr><td><span class="chip ${type === "income" ? "info" : "mut"}">${type === "income" ? "収入" : "支出"}</span></td><td>${esc(cat)}</td><td class="num">${yen(v)}</td></tr>`;
   }).join("");
   const pay = payrollTotalFor(m);
-  const labor = list.filter(t => t.type === "expense" && t.payrollBooked).reduce((a, t) => a + num(t.amount), 0);
+  const labor = list.filter(t => t.type === "expense" && t.payrollBooked && !t.ownerDraw).reduce((a, t) => a + num(t.amount), 0);
   const profit = monthSummary(m).profit;
   $("main").innerHTML =
     pageHead("収支管理", "日々の売上と経費を記録します",
@@ -1308,17 +1316,17 @@ VIEWS.money = function(){
         <span>収入 <strong style="font-size:17px">${yen(inc)}</strong></span>
         <span>支出 <strong style="font-size:17px">${yen(exp)}</strong></span>
         <span>差引 <strong style="font-size:17px;color:${inc - exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(inc - exp)}</strong></span>
-        ${pay || labor ? `<span>給料(${fmtMonth(m)}分・自動計算) <strong style="font-size:17px">${yen(pay)}</strong></span>
-        <span>利益(売上−経費−給料) <strong style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</strong></span>` : ""}
+        ${pay || labor || ownerPayFor(m) ? `<span>給料(従業員・${fmtMonth(m)}分・自動計算) <strong style="font-size:17px">${yen(pay)}</strong></span>
+        <span>利益(売上−経費−従業員給料) <strong style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</strong></span>` : ""}
       </div>
-      ${pay || labor ? `<div class="hint">給料は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の自動計算(締日ベース)です。「支出に計上」を押すまで上の支出・下の明細には入りませんが、<strong>利益には自動で反映されています</strong>。${labor ? `給料管理から計上した給与(${yen(labor)})は二重に引かないよう「給料」の側でのみ数えています(手入力した人件費はふつうの経費として利益から引かれます)。` : "給料日に給料管理の「全員分を支出に計上」を押すと明細にも記録されます。"}</div>` : ""}
+      ${pay || labor ? `<div class="hint">給料は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の自動計算(締日ベース)です。「支出に計上」を押すまで上の支出・下の明細には入りませんが、<strong>利益には自動で反映されています</strong>。${labor ? `給料管理から計上した従業員給与(${yen(labor)})は二重に引かないよう「給料」の側でのみ数えています(手入力した人件費はふつうの経費として利益から引かれます)。${ownerPayFor(m) ? `<strong>事業主(あなた)の給料(${yen(ownerPayFor(m))})は経費・支出には数えず、利益の中から受け取る「事業主貸」</strong>として扱います。` : ""}` : "給料日に給料管理の「全員分を支出に計上」を押すと明細にも記録されます。"}</div>` : ""}
     </div>
     <div class="card"><h2>明細 <span class="h2-sub">${list.length}件</span></h2>
       <div class="twrap">${list.length ? `<table>
         <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>支払方法</th><th>担当</th><th>メモ</th><th></th></tr>
         ${list.map(t => `<tr>
           <td style="white-space:nowrap">${fmtDate(t.date)}</td>
-          <td><span class="chip ${t.type === "income" ? "info" : "mut"}">${t.type === "income" ? "収入" : "支出"}</span></td>
+          <td><span class="chip ${t.type === "income" ? "info" : "mut"}">${t.type === "income" ? "収入" : t.ownerDraw ? "事業主貸" : "支出"}</span></td>
           <td>${esc(t.category)}</td>
           <td class="num" style="font-weight:600">${yen(t.amount)}</td>
           <td style="font-size:12px;color:var(--ink2);white-space:nowrap">${t.type === "income" ? esc(t.pay || "現金") : ""}</td>
@@ -1382,7 +1390,7 @@ function yearSummaryHtml(yr){
   const ytx = S.tx.filter(t => t.date && t.date.startsWith(yr + "-"));
   if(!ytx.length) return "";
   const yInc = sumTx(ytx, "income"), yExp = sumTx(ytx, "expense");
-  const expCat = groupSum(ytx.filter(t => t.type === "expense"), t => t.category || "未分類");
+  const expCat = groupSum(ytx.filter(t => t.type === "expense" && !t.ownerDraw), t => t.category || "未分類");
   return `<div class="card"><h2>${yr}年の年間集計 <span class="h2-sub">確定申告の参考に</span> <button class="btn sm" onclick="V.taxYear=${+yr};go('tax')">この年の納税予想 ›</button></h2>
     <div class="hr-sub" style="margin-bottom:10px">
       <span>収入計 <strong>${yen(yInc)}</strong></span>
@@ -1464,7 +1472,7 @@ window.exportTxCsv = function(){
   const m = V.moneyMonth;
   const rows = [["日付","区分","カテゴリ","金額","支払方法","税区分","担当","メモ"]];
   txInMonth(m).sort((a,b) => a.date.localeCompare(b.date)).forEach(t =>
-    rows.push([t.date, t.type === "income" ? "収入" : "支出", t.category, t.amount,
+    rows.push([t.date, t.type === "income" ? "収入" : (t.ownerDraw ? "事業主貸(経費外)" : "支出"), t.category, t.amount,
       t.type === "income" ? (t.pay || "現金") : "",
       t.type === "expense" ? (t.taxRate === "0" ? "対象外" : (t.taxRate || "10") + "%") : "",
       t.staffId ? staffName(t.staffId) : "", t.memo]));
@@ -1621,7 +1629,7 @@ VIEWS.payroll = function(){
     const P = payParamsFor(st, m);
     sumTotal += p.total;
     return `<tr>
-      <td style="font-weight:600;white-space:nowrap">${esc(st.name)}<div style="font-size:11px;color:var(--muted)">${P.payType === "monthly" ? "月給" : "時給 " + yen(P.wage)}${num(P.commission) ? " ・ 歩合" + P.commission + "%" : ""}</div></td>
+      <td style="font-weight:600;white-space:nowrap">${esc(st.name)}${st.owner === "1" ? ' <span class="chip info">事業主</span>' : st.owner === "family" ? ' <span class="chip mut">家族</span>' : ""}<div style="font-size:11px;color:var(--muted)">${P.payType === "monthly" ? "月給" : "時給 " + yen(P.wage)}${num(P.commission) ? " ・ 歩合" + P.commission + "%" : ""}</div></td>
       <td class="num">${p.hours.toFixed(1)}h</td>
       <td class="num payedit" onclick="editWageCell('${st.id}')" title="タップで${P.payType === "monthly" ? "月給" : "時給"}を変更"><span class="pe-v">${yen(p.base)}</span>${p.extra ? `<div style="font-size:11px;color:var(--ink2)" title="時間外${p.otH.toFixed(1)}h・深夜${p.nightH.toFixed(1)}hの25%増し">+割増 ${yen(p.extra)}</div>` : ""}</td>
       <td class="num payedit" onclick="editCommCell('${st.id}')" title="担当売上 ${yen(p.sales)} ・ タップで歩合率を変更"><span class="pe-v">${yen(p.comm)}</span></td>
@@ -1631,7 +1639,7 @@ VIEWS.payroll = function(){
       <td>${p.paid ? '<span class="chip good">支払済</span>' : '<span class="chip warn">未払</span>'}</td>
       <td style="white-space:nowrap">
         <button class="btn sm ghost" onclick="editAdj('${st.id}')">調整</button>
-        <button class="btn sm ghost" onclick="bookPay('${st.id}')" ${p.booked ? "disabled" : ""}>${p.booked ? "計上済" : "支出に計上"}</button>
+        <button class="btn sm ghost" onclick="bookPay('${st.id}')" ${p.booked ? "disabled" : ""}>${p.booked ? "計上済" : st.owner === "1" ? "受取を記録" : "支出に計上"}</button>
       </td>
     </tr>`;
   }).join("");
@@ -1666,7 +1674,7 @@ VIEWS.payroll = function(){
         <div class="hint"><strong>基本給・歩合・手当・控除の金額はタップするとその場で変更できます</strong>(表示中の月分から新しい金額で計算し、それより前の月は自動で今のまま。昇給の履歴も自動で残ります)。</div>
         <details class="hint"><summary>計算ルールの説明(タップで開く)</summary>勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。<strong>時給スタッフの1日8時間超・22時以降の勤務は25%増しの割増を自動計算</strong>します(週40時間超の割増と歩合分の割増は自動計算されません。シフト管理の週合計が40時間を超えると赤字で表示されます)。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。<br>
 <strong>控除について</strong>: 月8.8万円以上の給与からは源泉所得税の天引きが義務です(徴収漏れの追徴は店側の負担になります)。週20時間以上働くスタッフは雇用保険への加入が義務で、本人負担分を給与から控除します。個人経営の美容室は健康保険・厚生年金の適用外のため、給与から社会保険料を引くことは通常ありません(スタッフは自分で国保・国民年金を納めます)。税金・保険料以外の天引き(材料代など)には労使協定が必要です。締日・支払日と地域の最低賃金は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</details></div>`
-        + payProfitHtml(m, sumTotal)
+        + payProfitHtml(m, payrollTotalFor(m))
         + productivityHtml(m)
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
 };
@@ -1677,16 +1685,17 @@ function payProfitHtml(m, payTotal){
   const list = txInMonth(m);
   const inc = list.filter(t => t.type === "income").reduce((a, t) => a + num(t.amount), 0);
   const expOther = list.filter(t => t.type === "expense" && !t.payrollBooked).reduce((a, t) => a + num(t.amount), 0);
-  const expLabor = list.filter(t => t.type === "expense" && t.payrollBooked).reduce((a, t) => a + num(t.amount), 0);
+  const expLabor = list.filter(t => t.type === "expense" && t.payrollBooked && !t.ownerDraw).reduce((a, t) => a + num(t.amount), 0);
   const profit = inc - expOther - payTotal;
   return `<div class="card"><h2>${fmtMonth(m)}の利益 <span class="h2-sub">売上 − 経費 − 給料</span></h2>
     <div class="twrap"><table>
       <tr><td style="color:var(--muted);width:240px">売上(${fmtMonth(m)}・暦月)</td><td class="num">${yen(inc)}</td></tr>
       <tr><td style="color:var(--muted)">経費(計上済みの給与を除く)</td><td class="num">− ${yen(expOther)}</td></tr>
-      <tr><td style="color:var(--muted)">給料(${fmtMonth(m)}分の支給額合計)</td><td class="num">− ${yen(payTotal)}</td></tr>
-      <tr class="total"><td>利益</td><td class="num" style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</td></tr>
+      <tr><td style="color:var(--muted)">給料(従業員のみ・${fmtMonth(m)}分)</td><td class="num">− ${yen(payTotal)}</td></tr>
+      <tr class="total"><td>利益(あなたの取り分もここに含まれます)</td><td class="num" style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</td></tr>
+      ${ownerPayFor(m) ? `<tr><td style="color:var(--muted)">うち事業主(あなた)の給料として受け取り予定</td><td class="num">${yen(ownerPayFor(m))}</td></tr>` : ""}
     </table></div>
-    <div class="hint">給料は締日ベース(${fmtMonth(m)}分)、売上・経費は暦月(${fmtMonth(m)}の1日〜末日)の集計です。「支出に計上」ボタンで記録した給与${expLabor ? `(${yen(expLabor)})` : ""}は、二重に引かないよう経費から除外し「給料」の行でのみ数えています(手入力した人件費はふつうの経費として引かれます)。事業主本人の給料も引いた「経営上の利益(手元に残るお金)」であり、税金の計算では事業主の給料は経費にならないため、<a href="javascript:void(0)" onclick="go('tax')" style="color:var(--info)">納税予想</a>では自動で足し戻して計算します。</div>
+    <div class="hint">給料は締日ベース(${fmtMonth(m)}分)、売上・経費は暦月(${fmtMonth(m)}の1日〜末日)の集計です。「支出に計上」ボタンで記録した従業員給与${expLabor ? `(${yen(expLabor)})` : ""}は、二重に引かないよう経費から除外し「給料」の行でのみ数えています(手入力した人件費はふつうの経費として引かれます)。<strong>事業主(あなた)の給料は経費ではなく、この利益の中から受け取る扱い</strong>です(税金もこの利益に対してかかります。<a href="javascript:void(0)" onclick="go('tax')" style="color:var(--info)">納税予想</a>と同じ考え方)。</div>
   </div>`;
 }
 /* スタッフ生産性: 時間あたり売上と労働分配率(支給額÷担当売上) */
@@ -1781,11 +1790,15 @@ window.bookPay = function(staffId){
   const st = S.staff.find(s => s.id === staffId); if(!st) return;
   const m = V.payMonth;
   const p = calcPay(st, m);
-  ask(`${st.name}の${fmtMonth(m)}分給与 ${yen(p.total)} を人件費として支出に計上し、支払済にしますか?(計上日: 支払日 ${fmtDate(payDate(m))})`, () => {
+  const isOwner = st.owner === "1";
+  const msg = isOwner
+    ? `${st.name}(事業主)の${fmtMonth(m)}分 ${yen(p.total)} を「事業主貸(利益からの受け取り)」として記録し、支払済にしますか?経費・支出には数えません(計上日: 支払日 ${fmtDate(payDate(m))})`
+    : `${st.name}の${fmtMonth(m)}分給与 ${yen(p.total)} を人件費として支出に計上し、支払済にしますか?(計上日: 支払日 ${fmtDate(payDate(m))})`;
+  ask(msg, () => {
     const key = staffId + "_" + m;
-    S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId, payrollBooked: true});
+    S.tx.push({id: uid(), type:"expense", date: payDate(m), category: isOwner ? "事業主貸" : "人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId, payrollBooked: true, ...(isOwner ? {ownerDraw: true} : {})});
     S.payAdj[key] = Object.assign({}, S.payAdj[key], {paid:true, booked:true});
-    save(); toast("支出に計上しました"); render();
+    save(); toast(isOwner ? "受け取りを記録しました(経費にはなりません)" : "支出に計上しました"); render();
   });
 };
 /* 未計上の給与を全員分まとめて人件費として支出に計上する(給料日に1回押すだけでよい) */
@@ -1796,9 +1809,11 @@ window.bookPayAll = function(){
     .filter(x => !x.p.booked && x.p.total > 0);
   if(!targets.length){ toast("未計上の給料はありません(すべて計上済みか、支給額0円です)"); return; }
   const sum = targets.reduce((a, x) => a + x.p.total, 0);
-  ask(`${fmtMonth(m)}分の給与 ${targets.length}名分(合計 ${yen(sum)})を人件費として支出に計上し、支払済にしますか?(計上日: 支払日 ${fmtDate(payDate(m))})`, () => {
+  const hasOwnerT = targets.some(x => x.st.owner === "1");
+  ask(`${fmtMonth(m)}分の給与 ${targets.length}名分(合計 ${yen(sum)})を計上し、支払済にしますか?${hasOwnerT ? "事業主本人の分は経費ではなく「事業主貸(利益からの受け取り)」として記録されます。" : ""}(計上日: 支払日 ${fmtDate(payDate(m))})`, () => {
     targets.forEach(({ st, p }) => {
-      S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId: st.id, payrollBooked: true});
+      const isOwner = st.owner === "1";
+      S.tx.push({id: uid(), type:"expense", date: payDate(m), category: isOwner ? "事業主貸" : "人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId: st.id, payrollBooked: true, ...(isOwner ? {ownerDraw: true} : {})});
       S.payAdj[st.id + "_" + m] = Object.assign({}, S.payAdj[st.id + "_" + m], {paid:true, booked:true});
     });
     save(); toast(`${targets.length}名分(${yen(sum)})を支出に計上しました`); render();
@@ -1829,7 +1844,7 @@ VIEWS.staff = function(){
         <td class="num">${num(st.commission)}%</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editStaff('${st.id}')">編集</button><button class="btn sm ghost" onclick="delStaff('${st.id}')">削除</button></td>
       </tr>`).join("")}</table>` : `<div class="empty">スタッフが未登録です。「+ スタッフを追加」から登録してください。</div>`}</div>
-    <div class="hint">あなた自身の給料もここで管理している場合は、区分を<strong>「事業主本人」</strong>にしてください。事業主の給料は税金の計算では経費にならないため、納税予想が自動で足し戻して計算します(日々の利益表示は今までどおりです)。<strong>家族に給料を払っている場合は「家族従業員(専従者)」</strong>にしてください。家族の給料は「青色事業専従者給与の届出」を税務署に出した範囲内でのみ経費になり、届出をした家族は配偶者控除・扶養控除の対象外、雇用保険の対象外です。従業員を1人でも雇うと労災保険は加入義務、週20時間以上なら雇用保険も義務です。退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
+    <div class="hint">あなた自身の給料もここで管理している場合は、区分を<strong>「事業主本人」</strong>にしてください。事業主の給料は経費ではなく「利益からの受け取り(事業主貸)」として扱われ、利益・支出・納税予想のすべてが正しく計算されます。<strong>家族に給料を払っている場合は「家族従業員(専従者)」</strong>にしてください。家族の給料は「青色事業専従者給与の届出」を税務署に出した範囲内でのみ経費になり、届出をした家族は配偶者控除・扶養控除の対象外、雇用保険の対象外です。従業員を1人でも雇うと労災保険は加入義務、週20時間以上なら雇用保険も義務です。退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
 };
 function staffFields(){
   return [
@@ -2505,7 +2520,7 @@ let _cashSales = 0; // 表示中日付の現金売上(過不足のライブ計�
 VIEWS.closing = function(){
   const d = V.closeDate;
   const inc = S.tx.filter(t => t.type === "income" && t.date === d);
-  const exp = S.tx.filter(t => t.type === "expense" && t.date === d);
+  const exp = S.tx.filter(t => t.type === "expense" && t.date === d && !t.ownerDraw);
   const byPay = {};
   PAY_METHODS.forEach(p => byPay[p] = {n:0, v:0});
   inc.forEach(t => { const p = PAY_METHODS.includes(t.pay) ? t.pay : "現金"; byPay[p].n++; byPay[p].v += num(t.amount); });
@@ -3006,8 +3021,8 @@ VIEWS.tax = function(){
   const yr = V.taxYear, curYr = +todayStr().slice(0, 4);
   const isCur = yr === curYr, cfg = taxCfg();
   const act = yearTaxBase(yr);
-  /* 税金計算のもうけ(profit) = 帳簿上の利益(book) + 事業主の給料(足し戻し) */
-  const mkBase = f => ({ inc: f(act.inc), retail: f(act.retail), book: f(act.profit), ownerPay: f(act.ownerPay), profit: f(act.profit) + f(act.ownerPay) });
+  /* 利益は「売上−経費−従業員給料」で、事業主の給料は最初から引いていない(=そのまま税金計算のもうけ) */
+  const mkBase = f => ({ inc: f(act.inc), retail: f(act.retail), book: f(act.profit), ownerPay: f(act.ownerPay), profit: f(act.profit) });
   const actB = mkBase(v => v);
   const actT = calcTaxes(actB, cfg, yr);
   /* 今年は「年末までこのペース」の見込みも出す(経過日数で年換算。2週間未満はブレが大きいので出さない) */
@@ -3065,15 +3080,14 @@ VIEWS.tax = function(){
     </div>
     <div class="card"><h2>計算のもと(${projT ? "年末見込み" : "実績"}ベース)</h2>
       <div class="twrap"><table style="max-width:560px">
-        <tr><td style="color:var(--muted)">帳簿上の利益(売上−経費−給料)</td><td class="num">${yen(mainB.book)}</td></tr>
-        ${mainB.ownerPay ? `<tr><td style="color:var(--muted)">事業主(あなた)の給料 <span style="font-size:11px">経費にできないため足し戻し</span></td><td class="num">+ ${yen(mainB.ownerPay)}</td></tr>
-        <tr><td style="color:var(--muted);font-weight:600">税金計算上のもうけ</td><td class="num" style="font-weight:600">${yen(mainB.profit)}</td></tr>` : ""}
+        <tr><td style="color:var(--muted)">年間の利益(売上 − 経費 − 従業員の給料)</td><td class="num">${yen(mainB.profit)}</td></tr>
+        ${mainB.ownerPay ? `<tr><td style="color:var(--muted)"><span style="font-size:12px">参考: うち事業主(あなた)の給料として受け取る予定額(利益に含まれ、この全体に課税されます)</span></td><td class="num" style="color:var(--muted)">${yen(mainB.ownerPay)}</td></tr>` : ""}
         <tr><td style="color:var(--muted)">青色申告特別控除</td><td class="num">− ${yen(main.blueUsed)}</td></tr>
         <tr><td style="color:var(--muted)">所得控除の合計(社会保険料・生命保険料など)</td><td class="num">− ${yen(main.ded)}</td></tr>
         <tr><td style="color:var(--muted)">基礎控除(誰でも引けます)</td><td class="num">− ${yen(580000)}</td></tr>
         <tr class="total"><td>所得税の課税所得</td><td class="num">${yen(main.taxable)}</td></tr>
       </table></div>
-      <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。${main.jutakuUsed ? `<br>住宅ローン控除 <strong>${yen(main.jutakuUsed)}</strong> は課税所得からではなく、<strong>税額そのもの</strong>(所得税、引き切れない分は住民税から最大97,500円)から差し引いています。` : ""}${!ownerSet && S.staff.length ? `<br><strong>あなた自身の給料もスタッフとして払っている場合</strong>は、<a href="javascript:void(0)" onclick="go('staff')" style="color:var(--info)">スタッフ登録</a>でその人の区分を「事業主本人」にしてください。事業主の給料は経費にできないため、ここで自動的に足し戻して計算します。` : ""}${hasFamily ? `<br><strong>家族従業員(専従者)の給料</strong>は「青色事業専従者給与の届出」を出した範囲内でのみ経費になります。届出をしていない場合、実際の税額はこの表示より高くなります。また給料を払った家族は配偶者控除・扶養控除に入れられません。` : ""}${!main.exempt && main.shohi > 0 ? `<br>納める消費税(${yen(main.shohi)})は実際には経費にできるため、その分の所得税・住民税は表示より少し安くなります。` : ""}</div>
+      <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。${main.jutakuUsed ? `<br>住宅ローン控除 <strong>${yen(main.jutakuUsed)}</strong> は課税所得からではなく、<strong>税額そのもの</strong>(所得税、引き切れない分は住民税から最大97,500円)から差し引いています。` : ""}${!ownerSet && S.staff.length ? `<br><strong>あなた自身の給料もスタッフとして払っている場合</strong>は、<a href="javascript:void(0)" onclick="go('staff')" style="color:var(--info)">スタッフ登録</a>でその人の区分を「事業主本人」にしてください。事業主の給料は経費にならないため、設定しないと利益も税額も実際より少なく計算されてしまいます。` : ""}${hasFamily ? `<br><strong>家族従業員(専従者)の給料</strong>は「青色事業専従者給与の届出」を出した範囲内でのみ経費になります。届出をしていない場合、実際の税額はこの表示より高くなります。また給料を払った家族は配偶者控除・扶養控除に入れられません。` : ""}${!main.exempt && main.shohi > 0 ? `<br>納める消費税(${yen(main.shohi)})は実際には経費にできるため、その分の所得税・住民税は表示より少し安くなります。` : ""}</div>
     </div>` + corpCompareCardHtml(mainB.profit, main, cfg, !!projT)) +
     `<div class="card"><h2>前提の設定 <span class="h2-sub">変えて「保存」するとその場で計算し直します</span></h2>
       <div class="f-2col" style="max-width:640px">
