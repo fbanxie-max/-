@@ -1246,14 +1246,22 @@ VIEWS.money = function(){
     const [type, cat] = k.split("|");
     return `<tr><td><span class="chip ${type === "income" ? "info" : "mut"}">${type === "income" ? "収入" : "支出"}</span></td><td>${esc(cat)}</td><td class="num">${yen(v)}</td></tr>`;
   }).join("");
+  const pay = payrollTotalFor(m);
+  const labor = list.filter(t => t.type === "expense" && t.category === "人件費").reduce((a, t) => a + num(t.amount), 0);
+  const profit = monthSummary(m).profit;
   $("main").innerHTML =
     pageHead("収支管理", "日々の売上と経費を記録します",
       `<button class="btn pri" onclick="addTx('income')">+ 収入</button><button class="btn" onclick="addTx('expense')">+ 支出</button><button class="btn" onclick="exportTxCsv()">CSV出力</button>`) +
-    `<div class="card" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
-      ${monthNav(m, "moneyNav")}
-      <span>収入 <strong style="font-size:17px">${yen(inc)}</strong></span>
-      <span>支出 <strong style="font-size:17px">${yen(exp)}</strong></span>
-      <span>差引 <strong style="font-size:17px;color:${inc - exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(inc - exp)}</strong></span>
+    `<div class="card">
+      <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+        ${monthNav(m, "moneyNav")}
+        <span>収入 <strong style="font-size:17px">${yen(inc)}</strong></span>
+        <span>支出 <strong style="font-size:17px">${yen(exp)}</strong></span>
+        <span>差引 <strong style="font-size:17px;color:${inc - exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(inc - exp)}</strong></span>
+        ${pay || labor ? `<span>給料(${fmtMonth(m)}分・自動計算) <strong style="font-size:17px">${yen(pay)}</strong></span>
+        <span>利益(売上−経費−給料) <strong style="font-size:17px;color:${profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(profit)}</strong></span>` : ""}
+      </div>
+      ${pay || labor ? `<div class="hint">給料は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の自動計算(締日ベース)です。「支出に計上」を押すまで上の支出・下の明細には入りませんが、<strong>利益には自動で反映されています</strong>。${labor ? `計上済みの人件費(${yen(labor)})は二重に引かないよう「給料」の側でのみ数えています。` : "給料日に給料管理の「全員分を支出に計上」を押すと明細にも記録されます。"}</div>` : ""}
     </div>
     <div class="card"><h2>明細 <span class="h2-sub">${list.length}件</span></h2>
       <div class="twrap">${list.length ? `<table>
@@ -1559,7 +1567,7 @@ VIEWS.payroll = function(){
   const pp = payPeriod(m);
   $("main").innerHTML =
     pageHead("給料管理", `${fmtMonth(m)}分 = ${fmtDate(pp.from)}〜${fmtDate(pp.to)}(${payCloseLabel()}締め)・ 支払日 ${fmtDate(payDate(m))}(${payDayLabel()}払い)`,
-      `${monthNav(m, "payNav")}<button class="btn" onclick="openPayslips()">給与明細(印刷)</button><button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
+      `${monthNav(m, "payNav")}<button class="btn" onclick="bookPayAll()">全員分を支出に計上</button><button class="btn" onclick="openPayslips()">給与明細(印刷)</button><button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
     (S.staff.length
       ? `<div class="card"><div class="twrap"><table>
           <tr><th>スタッフ</th><th class="num">勤務時間</th><th class="num">基本給</th><th class="num">歩合</th><th class="num">手当</th><th class="num">控除</th><th class="num">支給額</th><th>状態</th><th></th></tr>
@@ -1670,11 +1678,27 @@ window.bookPay = function(staffId){
   const st = S.staff.find(s => s.id === staffId); if(!st) return;
   const m = V.payMonth;
   const p = calcPay(st, m);
-  ask(`${st.name}の${fmtMonth(m)}分給与 ${yen(p.total)} を人件費として支出に計上し、支払済にしますか?`, () => {
+  ask(`${st.name}の${fmtMonth(m)}分給与 ${yen(p.total)} を人件費として支出に計上し、支払済にしますか?(計上日: 支払日 ${fmtDate(payDate(m))})`, () => {
     const key = staffId + "_" + m;
-    S.tx.push({id: uid(), type:"expense", date: todayStr(), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId});
+    S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId});
     S.payAdj[key] = Object.assign({}, S.payAdj[key], {paid:true, booked:true});
     save(); toast("支出に計上しました"); render();
+  });
+};
+/* 未計上の給与を全員分まとめて人件費として支出に計上する(給料日に1回押すだけでよい) */
+window.bookPayAll = function(){
+  const m = V.payMonth;
+  const targets = S.staff.filter(st => staffActiveIn(st, m))
+    .map(st => ({ st, p: calcPay(st, m) }))
+    .filter(x => !x.p.booked && x.p.total > 0);
+  if(!targets.length){ toast("未計上の給料はありません(すべて計上済みか、支給額0円です)"); return; }
+  const sum = targets.reduce((a, x) => a + x.p.total, 0);
+  ask(`${fmtMonth(m)}分の給与 ${targets.length}名分(合計 ${yen(sum)})を人件費として支出に計上し、支払済にしますか?(計上日: 支払日 ${fmtDate(payDate(m))})`, () => {
+    targets.forEach(({ st, p }) => {
+      S.tx.push({id: uid(), type:"expense", date: payDate(m), category:"人件費", amount: p.total, memo:`${st.name} ${fmtMonth(m)}分給与`, staffId: st.id});
+      S.payAdj[st.id + "_" + m] = Object.assign({}, S.payAdj[st.id + "_" + m], {paid:true, booked:true});
+    });
+    save(); toast(`${targets.length}名分(${yen(sum)})を支出に計上しました`); render();
   });
 };
 window.exportPayCsv = function(){
