@@ -303,7 +303,7 @@ const DEFAULTS = {
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
   tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(旧データの税区分。入力欄は廃止・CSV出力互換のため保持),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
-  shifts: [],     // {id,staffId,date,start,end,brk,note}
+  shifts: [],     // {id,staffId,date,start,end,note} 旧データのbrk(休憩)は使用しない(休憩も時給支払いの方針)
   payAdj: {},     // key `${staffId}_${month}` -> {allow,deduct,memo,paid,booked}
   orders: [],     // {id,date,supplier,item,qty,unit,amount,memo,status,invId,deliveredDate,booked}
   inv: [],        // {id,name,category,qty,unit,minQty,price,menuCat,useQty}
@@ -404,10 +404,11 @@ function addMonths(m, delta){ const [y,mo] = m.split("-").map(Number); const dt 
 function addDays(iso, delta){ const [y,m,d] = iso.split("-").map(Number); const dt = new Date(y, m-1, d+delta); return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0"); }
 function mondayOf(iso){ const [y,m,d] = iso.split("-").map(Number); const dt = new Date(y, m-1, d); const shift = (dt.getDay()+6)%7; return addDays(iso, -shift); }
 function toMin(t){ if(!t) return 0; const [h,m] = t.split(":").map(Number); return h*60 + (m||0); }
-/* シフト1件の実働時間の内訳。ot=1日8時間を超えた分、night=22時以降の分(いずれも法律で25%増しの支払いが必要) */
+/* シフト1件の支払時間の内訳。休憩中も時給を支払う方針のため、開始〜終了の全時間で計算する(休憩は差し引かない)。
+   ot=1日8時間を超えた分、night=22時以降の分(いずれも法律で25%増しの支払いが必要) */
 function shiftDetail(sh){
   const st = toMin(sh.start), en = toMin(sh.end);
-  const total = Math.max(0, en - st - num(sh.brk)) / 60;
+  const total = Math.max(0, en - st) / 60;
   const ot = Math.max(0, total - 8);
   const night = Math.min(Math.max(0, en - Math.max(st, 22 * 60)) / 60, total);
   return { total, ot, night };
@@ -1570,15 +1571,14 @@ VIEWS.shifts = function(){
       `<span class="mnav"><button class="btn sm" onclick="weekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="weekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="weekToday()">今週</button>`) +
     (S.staff.length
       ? `<div class="card"><div class="twrap"><table><tr><th>スタッフ</th>${head}<th class="num">週合計</th></tr>${rows}</table></div>
-         <div class="hint">休憩時間は勤務時間から自動で差し引かれ、給料管理の時給計算に反映されます。法律の基準: 実働6時間超は休憩45分以上・8時間超は60分以上。1日8時間・週40時間を超える勤務は25%増しの割増賃金が必要です(時給スタッフの1日8時間超・22時以降分は給料管理で自動計算。週合計が40時間を超えると右端に⚠が出ます)。</div></div>`
+         <div class="hint"><strong>休憩中も時給を支払う方針のため、開始〜終了の全時間で給料を計算します</strong>(休憩の入力はありません)。休憩そのものは法律どおり与えてください(6時間超の勤務は45分以上・8時間超は60分以上)。1日8時間・週40時間を超える勤務は25%増しの割増賃金が必要です(時給スタッフの1日8時間超・22時以降分は給料管理で自動計算。週合計が40時間を超えると右端に⚠が出ます)。</div></div>`
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
 };
 function shiftFields(){
   return [
     {key:"start", label:"開始", type:"time", value:"10:00", required:true, half:true},
     {key:"end", label:"終了", type:"time", value:"19:00", required:true, half:true},
-    {key:"brk", label:"休憩(分)", type:"number", value:60, min:0, half:true},
-    {key:"note", label:"メモ", type:"text", half:true}
+    {key:"note", label:"メモ", type:"text"}
   ];
 }
 const shiftValidate = v => toMin(v.end) <= toMin(v.start) ? "終了時刻は開始より後にしてください" : "";
@@ -1588,12 +1588,9 @@ function payMonthOf(d){
   const pp = payPeriod(m);
   return (d >= pp.from && d <= pp.to) ? m : addMonths(m, 1);
 }
-/* 保存前の注意(法定休憩の不足・計上済み給与とのズレ)。空配列なら問題なし */
+/* 保存前の注意(計上済み給与とのズレ)。空配列なら問題なし */
 function shiftWarnings(staffId, date, v){
   const msgs = [];
-  const worked = toMin(v.end) - toMin(v.start) - num(v.brk);
-  if(worked > 480 && num(v.brk) < 60) msgs.push("実働8時間超は休憩60分以上が法律の基準です");
-  else if(worked > 360 && num(v.brk) < 45) msgs.push("実働6時間超は休憩45分以上が法律の基準です");
   const pm = payMonthOf(date);
   if((S.payAdj[staffId + "_" + pm] || {}).booked) msgs.push(`${fmtMonth(pm)}分の給与はすでに支出に計上済みのため、変更すると計上額と表示額がズレます`);
   return msgs;
@@ -3334,8 +3331,8 @@ window.seedSample = function(){
     {id: uid(), type:"expense", date: t, category:"材料費", amount:12400, memo:"ディーラー仕入", staffId:"", taxRate:"10"},
     {id: uid(), type:"expense", date: t, category:"会議・交際費", amount:860, memo:"お客様用お菓子", staffId:"", taxRate:"8"});
   S.shifts.push(
-    {id: uid(), staffId: s1, date: t, start:"09:30", end:"19:00", brk:60, note:""},
-    {id: uid(), staffId: s2, date: t, start:"10:00", end:"18:00", brk:60, note:""});
+    {id: uid(), staffId: s1, date: t, start:"09:30", end:"19:00", note:""},
+    {id: uid(), staffId: s2, date: t, start:"10:00", end:"18:00", note:""});
   S.appts.push(
     {id: uid(), date: t, time:"14:00", name:"山本 花子", customerId: c1, menu:"カット", staffId: s1, price:4950, status:"open", dur:60, nominated:"1", memo:"リタッチ相談"},
     {id: uid(), date: t, time:"16:30", name:"新規 太郎", menu:"カット", staffId: s2, price:3800, status:"open", dur:60, nominated:"", memo:""});
