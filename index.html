@@ -2802,7 +2802,7 @@ VIEWS.tax = function(){
           </select></div>
         <div class="f-row"><label for="set-tax-from">課税事業者になる年(その年の分から計算)</label>
           <input id="set-tax-from" type="number" inputmode="numeric" min="2000" max="2100" step="1" value="${num(cfg.ctFrom) > 0 ? num(cfg.ctFrom) : ""}" placeholder="例: 2027(空欄なら全部の年で計算)">
-          <div class="hint">開業から2年ほどの免税期間中は、この年より前の分の消費税を0円として扱います。</div></div>
+          <div class="hint">この年より前の分の消費税は0円(免税)として扱います。インボイス登録をしない場合、課税が始まるのは「2年前の売上が1,000万円を超えた年」からです(ずっと1,000万円以下なら左の欄を「納めない」に)。</div></div>
       </div>
       <h2 style="margin-top:16px">所得控除(もうけから引けるもの) <span class="h2-sub">年間の金額を円で入力。空欄=なし</span></h2>
       <div class="f-2col" style="max-width:640px">
@@ -2825,7 +2825,8 @@ VIEWS.tax = function(){
       <div class="alertline"><span class="chip info">住民税</span>${yr + 1}年6月から年4回に分けて納付(納付書が届きます)</div>
       <div class="alertline"><span class="chip info">個人事業税</span>${yr + 1}年8月と11月の2回(利益290万円以下なら請求されません)</div>
     </div>
-    <div class="hint">※ この金額は帳簿上の利益から機械的に計算した<strong>概算の目安</strong>です(基礎控除58万円など${curYr}年時点の税制で計算)。扶養の状況・各種控除・売上の税率区分などで実際の税額は変わります。申告時は税務署の案内や税理士さんにご確認ください。</div>`;
+    <div class="hint">※ この金額は帳簿上の利益から機械的に計算した<strong>概算の目安</strong>です(基礎控除58万円など${curYr}年時点の税制で計算)。扶養の状況・各種控除・売上の税率区分などで実際の税額は変わります。申告時は税務署の案内や税理士さんにご確認ください。<br>
+    ※ この計算は<strong>個人事業主向け</strong>です。法人化(会社設立)した場合は法人税の計算になるため、この画面の金額は当てはまりません。</div>`;
 };
 /* ================= settings ================= */
 VIEWS.settings = function(){
