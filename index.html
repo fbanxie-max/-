@@ -299,7 +299,7 @@ const LS_KEY = "salon-mgr-v1";
   document.body.prepend(div);
 })();
 const DEFAULTS = {
-  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same", closedWd: [], closedDates: [], tax: { type: "blue65", ct: "kanni", ctFrom: 2027, deds: {} } }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。closedWd: 定休日の曜日番号(0=日〜6=土)、closedDates: 臨時休業日['YYYY-MM-DD']。旧バックアップにはキーが無いため利用側でガードする
+  settings: { name: "マイサロン", target: 0, targets: {}, lastBackup: "", payClose: 20, payDay: 25, payMonth: "same", closedWd: [], closedDates: [], minWage: 0, tax: { type: "blue65", ct: "kanni", ctFrom: 2027, deds: {} } }, // target: 共通の月間売上目標(円)、targets: 月別の上書き{'YYYY-MM':円}、lastBackup: 最終バックアップ日。payClose: 給与締日(1-28、31=末日)、payDay: 給与支払日(同)、payMonth: 'same'当月払い|'next'翌月払い。closedWd: 定休日の曜日番号(0=日〜6=土)、closedDates: 臨時休業日['YYYY-MM-DD']。旧バックアップにはキーが無いため利用側でガードする
   staff: [],      // {id,name,role,payType:'hourly'|'monthly',wage,commission}
   tx: [],         // {id,date,type:'income'|'expense',category,amount,memo,staffId,pay(収入のみ),taxRate(旧データの税区分。入力欄は廃止・CSV出力互換のため保持),bulk(過去実績まとめ入力=true)}
   receipts: [],   // {id,date,vendor,amount,category,memo,img}
@@ -401,7 +401,15 @@ function addMonths(m, delta){ const [y,mo] = m.split("-").map(Number); const dt 
 function addDays(iso, delta){ const [y,m,d] = iso.split("-").map(Number); const dt = new Date(y, m-1, d+delta); return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0"); }
 function mondayOf(iso){ const [y,m,d] = iso.split("-").map(Number); const dt = new Date(y, m-1, d); const shift = (dt.getDay()+6)%7; return addDays(iso, -shift); }
 function toMin(t){ if(!t) return 0; const [h,m] = t.split(":").map(Number); return h*60 + (m||0); }
-function shiftHours(sh){ const mins = toMin(sh.end) - toMin(sh.start) - num(sh.brk); return Math.max(0, mins)/60; }
+/* シフト1件の実働時間の内訳。ot=1日8時間を超えた分、night=22時以降の分(いずれも法律で25%増しの支払いが必要) */
+function shiftDetail(sh){
+  const st = toMin(sh.start), en = toMin(sh.end);
+  const total = Math.max(0, en - st - num(sh.brk)) / 60;
+  const ot = Math.max(0, total - 8);
+  const night = Math.min(Math.max(0, en - Math.max(st, 22 * 60)) / 60, total);
+  return { total, ot, night };
+}
+function shiftHours(sh){ return shiftDetail(sh).total; }
 const staffName = id => (S.staff.find(s => s.id === id) || {}).name || "—";
 function toast(msg){
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
@@ -745,12 +753,25 @@ function calcPay(st, m){
   const adj = S.payAdj[st.id + "_" + m] || {};
   const P = payParamsFor(st, m);
   const pp = payPeriod(m);
-  const hours = S.shifts.filter(s => s.staffId === st.id && s.date >= pp.from && s.date <= pp.to).reduce((a,s) => a + shiftHours(s), 0);
-  const base = P.payType === "monthly" ? num(P.wage) : Math.round(hours * num(P.wage));
+  const shs = S.shifts.filter(s2 => s2.staffId === st.id && s2.date >= pp.from && s2.date <= pp.to);
+  let hours = 0, otH = 0, nightH = 0;
+  shs.forEach(s2 => { const d = shiftDetail(s2); hours += d.total; otH += d.ot; nightH += d.night; });
+  const days = new Set(shs.map(s2 => s2.date)).size;
+  const hourly = P.payType !== "monthly";
+  const base = hourly ? Math.round(hours * num(P.wage)) : num(P.wage);
+  /* 法定割増(時給者のみ自動計算): 1日8時間超と22時以降の深夜は各25%増し。
+     月給者・歩合分の割増と週40時間超の割増は自動計算していない(画面で警告) */
+  const extra = hourly ? Math.round((otH + nightH) * num(P.wage) * 0.25) : 0;
   const sales = S.tx.filter(t => t.type === "income" && t.staffId === st.id && t.date >= pp.from && t.date <= pp.to).reduce((a,t) => a + num(t.amount), 0);
   const comm = Math.round(sales * num(P.commission) / 100);
-  const total = base + comm + num(adj.allow) - num(adj.deduct);
-  return { hours, base, sales, comm, allow: num(adj.allow), deduct: num(adj.deduct), total, paid: !!adj.paid, booked: !!adj.booked, memo: adj.memo || "" };
+  /* 手当・控除は項目別(通勤手当・源泉所得税・雇用保険料)。旧データはallow/deductのみでそのまま動く */
+  const commute = num(adj.commute), allowOther = num(adj.allow);
+  const srcTax = num(adj.srcTax), empIns = num(adj.empIns), deductOther = num(adj.deduct);
+  const allow = commute + allowOther, deduct = srcTax + empIns + deductOther;
+  const total = base + extra + comm + allow - deduct;
+  return { hours, otH, nightH, days, base, extra, sales, comm,
+    commute, allowOther, srcTax, empIns, deductOther, allow, deduct, total,
+    paid: !!adj.paid, booked: !!adj.booked, memo: adj.memo || "" };
 }
 /* ================= navigation ================= */
 const NAV = [
@@ -1370,7 +1391,7 @@ function yearSummaryHtml(yr){
     </div>
     ${expCat.length ? `<div class="twrap"><table><tr><th>経費カテゴリ</th><th class="num">年間合計</th></tr>
       ${expCat.map(([c,v]) => `<tr><td>${esc(c)}</td><td class="num">${yen(v)}</td></tr>`).join("")}</table></div>` : ""}
-    <div class="hint">経費の年間合計です。明細は各月のCSV出力をご利用ください。</div>
+    <div class="hint">経費の年間合計です。明細は各月のCSV出力をご利用ください。ここの「差引」は記録済みの収支の単純な差引です。税金計算のもとになる利益(給料込み・事業主給料の足し戻し後)は「この年の納税予想 ›」の「計算のもと」をご覧ください。</div>
   </div>`;
 }
 function txFields(type){
@@ -1534,14 +1555,14 @@ VIEWS.shifts = function(){
         <button class="addcell" onclick="addShift('${st.id}','${d}')" aria-label="シフト追加">+</button>
       </td>`;
     }).join("");
-    return `<tr><td style="font-weight:600;white-space:nowrap">${esc(st.name)}</td>${cells}<td class="num" style="white-space:nowrap">${weekH.toFixed(1)}h</td></tr>`;
+    return `<tr><td style="font-weight:600;white-space:nowrap">${esc(st.name)}</td>${cells}<td class="num" style="white-space:nowrap${weekH > 40 ? ";color:var(--crit);font-weight:700" : ""}"${weekH > 40 ? ' title="週40時間を超えています(超過分は25%増しの割増賃金が必要です)"' : ""}>${weekH.toFixed(1)}h${weekH > 40 ? "⚠" : ""}</td></tr>`;
   }).join("");
   $("main").innerHTML =
     pageHead("シフト管理", "セルの「+」をタップして勤務時間を登録します",
       `<span class="mnav"><button class="btn sm" onclick="weekNav(-1)" aria-label="前週">‹</button><span class="mn-label">${fmtDate(days[0])} – ${fmtDate(days[6])}</span><button class="btn sm" onclick="weekNav(1)" aria-label="翌週">›</button></span><button class="btn sm" onclick="weekToday()">今週</button>`) +
     (S.staff.length
       ? `<div class="card"><div class="twrap"><table><tr><th>スタッフ</th>${head}<th class="num">週合計</th></tr>${rows}</table></div>
-         <div class="hint">休憩時間は勤務時間から自動で差し引かれ、給料管理の時給計算に反映されます。</div></div>`
+         <div class="hint">休憩時間は勤務時間から自動で差し引かれ、給料管理の時給計算に反映されます。法律の基準: 実働6時間超は休憩45分以上・8時間超は60分以上。1日8時間・週40時間を超える勤務は25%増しの割増賃金が必要です(時給スタッフの1日8時間超・22時以降分は給料管理で自動計算。週合計が40時間を超えると右端に⚠が出ます)。</div></div>`
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
 };
 function shiftFields(){
@@ -1553,10 +1574,28 @@ function shiftFields(){
   ];
 }
 const shiftValidate = v => toMin(v.end) <= toMin(v.start) ? "終了時刻は開始より後にしてください" : "";
+/* シフトの日付がどの月の給与に入るか(締日をまたぐと翌月分になる) */
+function payMonthOf(d){
+  const m = d.slice(0, 7);
+  const pp = payPeriod(m);
+  return (d >= pp.from && d <= pp.to) ? m : addMonths(m, 1);
+}
+/* 保存前の注意(法定休憩の不足・計上済み給与とのズレ)。空配列なら問題なし */
+function shiftWarnings(staffId, date, v){
+  const msgs = [];
+  const worked = toMin(v.end) - toMin(v.start) - num(v.brk);
+  if(worked > 480 && num(v.brk) < 60) msgs.push("実働8時間超は休憩60分以上が法律の基準です");
+  else if(worked > 360 && num(v.brk) < 45) msgs.push("実働6時間超は休憩45分以上が法律の基準です");
+  const pm = payMonthOf(date);
+  if((S.payAdj[staffId + "_" + pm] || {}).booked) msgs.push(`${fmtMonth(pm)}分の給与はすでに支出に計上済みのため、変更すると計上額と表示額がズレます`);
+  return msgs;
+}
 window.addShift = function(staffId, date){
   openForm({ title: `${staffName(staffId)} ・ ${fmtDate(date)} のシフト`, fields: shiftFields(), validate: shiftValidate,
     onsave: v => {
-      S.shifts.push({id: uid(), staffId, date, ...v}); save(); toast("シフトを登録しました"); render();
+      const doIt = () => { S.shifts.push({id: uid(), staffId, date, ...v}); save(); toast("シフトを登録しました"); render(); };
+      const w = shiftWarnings(staffId, date, v);
+      if(w.length) ask(w.join("。") + "。このまま保存しますか?", doIt); else doIt();
     } });
 };
 window.editShift = function(id){
@@ -1565,7 +1604,9 @@ window.editShift = function(id){
   window._delShift = () => { closeModal(); ask("このシフトを削除しますか?", () => { S.shifts = S.shifts.filter(x => x.id !== id); save(); toast("削除しました"); render(); }); };
   openForm({ title: `${staffName(s.staffId)} ・ ${fmtDate(s.date)} のシフト`, fields: fs, data: s, validate: shiftValidate,
     onsave: v => {
-      Object.assign(s, v); save(); toast("更新しました"); render();
+      const doIt = () => { Object.assign(s, v); save(); toast("更新しました"); render(); };
+      const w = shiftWarnings(s.staffId, s.date, v);
+      if(w.length) ask(w.join("。") + "。このまま保存しますか?", doIt); else doIt();
     } });
   document.querySelector(".m-foot").insertAdjacentHTML("afterbegin", `<button type="button" class="btn danger" style="margin-right:auto" onclick="_delShift()">削除</button>`);
 };
@@ -1582,7 +1623,7 @@ VIEWS.payroll = function(){
     return `<tr>
       <td style="font-weight:600;white-space:nowrap">${esc(st.name)}<div style="font-size:11px;color:var(--muted)">${P.payType === "monthly" ? "月給" : "時給 " + yen(P.wage)}${num(P.commission) ? " ・ 歩合" + P.commission + "%" : ""}</div></td>
       <td class="num">${p.hours.toFixed(1)}h</td>
-      <td class="num payedit" onclick="editWageCell('${st.id}')" title="タップで${P.payType === "monthly" ? "月給" : "時給"}を変更"><span class="pe-v">${yen(p.base)}</span></td>
+      <td class="num payedit" onclick="editWageCell('${st.id}')" title="タップで${P.payType === "monthly" ? "月給" : "時給"}を変更"><span class="pe-v">${yen(p.base)}</span>${p.extra ? `<div style="font-size:11px;color:var(--ink2)" title="時間外${p.otH.toFixed(1)}h・深夜${p.nightH.toFixed(1)}hの25%増し">+割増 ${yen(p.extra)}</div>` : ""}</td>
       <td class="num payedit" onclick="editCommCell('${st.id}')" title="担当売上 ${yen(p.sales)} ・ タップで歩合率を変更"><span class="pe-v">${yen(p.comm)}</span></td>
       <td class="num payedit" onclick="editAdj('${st.id}')" title="タップで手当・控除を調整"><span class="pe-v">${yen(p.allow)}</span></td>
       <td class="num payedit" onclick="editAdj('${st.id}')" title="タップで手当・控除を調整"><span class="pe-v">${p.deduct ? "−" + yen(p.deduct).slice(1) : yen(0)}</span></td>
@@ -1595,6 +1636,23 @@ VIEWS.payroll = function(){
     </tr>`;
   }).join("");
   const pp = payPeriod(m);
+  /* 法令上の注意(源泉徴収・最低賃金・月給者の残業割増)。給与を払う前に気づけるように表示する */
+  const lawWarns = [];
+  const minW = num(S.settings.minWage);
+  staffList.forEach(st => {
+    const p = calcPay(st, m);
+    const P = payParamsFor(st, m);
+    if(st.owner !== "1" && p.total >= 88000 && !p.srcTax)
+      lawWarns.push(`${st.name}: 支給額が月8.8万円以上ですが源泉所得税が0円です。「調整」から天引き額を入れてください(税額表は国税庁サイト参照)`);
+    if(minW > 0){
+      if(P.payType !== "monthly" && num(P.wage) < minW)
+        lawWarns.push(`${st.name}: 時給${yen(P.wage)}が設定した最低賃金(${yen(minW)}/時)を下回っています`);
+      if(P.payType === "monthly" && p.hours > 0 && (p.base + p.extra) / p.hours < minW)
+        lawWarns.push(`${st.name}: 月給を勤務時間で割ると時給換算${yen(Math.round((p.base + p.extra) / p.hours))}となり、最低賃金(${yen(minW)}/時)を下回っています`);
+    }
+    if(P.payType === "monthly" && (p.otH > 0 || p.nightH > 0))
+      lawWarns.push(`${st.name}(月給): 時間外${p.otH.toFixed(1)}h・深夜${p.nightH.toFixed(1)}hがあります。月給者の割増(25%増)は自動計算されないため「調整」の手当で加算してください`);
+  });
   $("main").innerHTML =
     pageHead("給料管理", `${fmtMonth(m)}分 = ${fmtDate(pp.from)}〜${fmtDate(pp.to)}(${payCloseLabel()}締め)・ 支払日 ${fmtDate(payDate(m))}(${payDayLabel()}払い)`,
       `${monthNav(m, "payNav")}<button class="btn" onclick="bookPayAll()">全員分を支出に計上</button><button class="btn" onclick="openPayslips()">給与明細(印刷)</button><button class="btn" onclick="exportPayCsv()">CSV出力</button>`) +
@@ -1604,8 +1662,10 @@ VIEWS.payroll = function(){
           ${rows}
           <tr class="total"><td>合計</td><td></td><td></td><td></td><td></td><td></td><td class="num">${yen(sumTotal)}</td><td></td><td></td></tr>
         </table></div>
+        ${lawWarns.length ? lawWarns.map(w => `<div class="alertline"><span class="chip warn">要確認</span>${esc(w)}</div>`).join("") : ""}
         <div class="hint"><strong>基本給・歩合・手当・控除の金額はタップするとその場で変更できます</strong>(表示中の月分から新しい金額で計算し、それより前の月は自動で今のまま。昇給の履歴も自動で残ります)。</div>
-        <details class="hint"><summary>計算ルールの説明(タップで開く)</summary>勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。締日・支払日は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</details></div>`
+        <details class="hint"><summary>計算ルールの説明(タップで開く)</summary>勤務時間・担当売上は対象期間(${payCloseLabel()}締め: ${fmtDate(pp.from)}〜${fmtDate(pp.to)})で集計します。基本給: 時給スタッフは「シフトの勤務時間 × 時給」、月給スタッフは固定額。<strong>時給スタッフの1日8時間超・22時以降の勤務は25%増しの割増を自動計算</strong>します(週40時間超の割増と歩合分の割増は自動計算されません。シフト管理の週合計が40時間を超えると赤字で表示されます)。歩合: 収支管理で担当者を設定した売上 × 歩合率。「支出に計上」で人件費として収支管理へ反映されます。<br>
+<strong>控除について</strong>: 月8.8万円以上の給与からは源泉所得税の天引きが義務です(徴収漏れの追徴は店側の負担になります)。週20時間以上働くスタッフは雇用保険への加入が義務で、本人負担分を給与から控除します。個人経営の美容室は健康保険・厚生年金の適用外のため、給与から社会保険料を引くことは通常ありません(スタッフは自分で国保・国民年金を納めます)。税金・保険料以外の天引き(材料代など)には労使協定が必要です。締日・支払日と地域の最低賃金は<a href="javascript:void(0)" onclick="go('settings')" style="color:var(--info)">設定・バックアップ</a>で変更できます。</details></div>`
         + payProfitHtml(m, sumTotal)
         + productivityHtml(m)
       : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`);
@@ -1704,13 +1764,16 @@ window.editAdj = function(staffId){
   /* paidは真偽値で保存されているため、選択肢の値("1"/"")に変換してから渡す */
   openForm({ title: `${staffName(staffId)} ・ ${fmtMonth(V.payMonth)}の調整`, data: {...adj, paid: adj.paid ? "1" : ""},
     fields: [
-      {key:"allow", label:"手当(交通費・役職手当など/円)", type:"number", value:0, min:0},
-      {key:"deduct", label:"控除(社会保険・源泉徴収など/円)", type:"number", value:0, min:0},
+      {key:"commute", label:"通勤手当(非課税・円)", type:"number", value:0, min:0, half:true},
+      {key:"allow", label:"その他手当(役職手当など・円)", type:"number", value:0, min:0, half:true},
+      {key:"srcTax", label:"源泉所得税(円)※月8.8万円以上の給与は天引きが義務", type:"number", value:0, min:0, half:true},
+      {key:"empIns", label:"雇用保険料(本人負担・円)※週20時間以上で加入義務", type:"number", value:0, min:0, half:true},
+      {key:"deduct", label:"その他控除(円)※税金・保険料以外の天引きには労使協定が必要です", type:"number", value:0, min:0},
       {key:"paid", label:"支払状況", type:"select", options:[["","未払"],["1","支払済"]]},
       {key:"memo", label:"メモ", type:"text"}
     ],
     onsave: v => {
-      S.payAdj[key] = Object.assign({}, S.payAdj[key], {allow: v.allow, deduct: v.deduct, paid: !!v.paid, memo: v.memo});
+      S.payAdj[key] = Object.assign({}, S.payAdj[key], {commute: v.commute, allow: v.allow, srcTax: v.srcTax, empIns: v.empIns, deduct: v.deduct, paid: !!v.paid, memo: v.memo});
       save(); toast("調整を保存しました"); render();
     } });
 };
@@ -1743,10 +1806,10 @@ window.bookPayAll = function(){
 };
 window.exportPayCsv = function(){
   const m = V.payMonth;
-  const rows = [["スタッフ","勤務時間","基本給","担当売上","歩合","手当","控除","支給額","状態"]];
+  const rows = [["スタッフ","労働日数","勤務時間","うち時間外h","うち深夜h","基本給","割増賃金","担当売上","歩合","通勤手当","その他手当","源泉所得税","雇用保険料","その他控除","支給額","状態"]];
   S.staff.filter(st => staffActiveIn(st, m)).forEach(st => {
     const p = calcPay(st, m);
-    rows.push([st.name, p.hours.toFixed(1), p.base, p.sales, p.comm, p.allow, p.deduct, p.total, p.paid ? "支払済" : "未払"]);
+    rows.push([st.name, p.days, p.hours.toFixed(1), p.otH.toFixed(1), p.nightH.toFixed(1), p.base, p.extra, p.sales, p.comm, p.commute, p.allowOther, p.srcTax, p.empIns, p.deductOther, p.total, p.paid ? "支払済" : "未払"]);
   });
   dlCSV(`給与_${m}.csv`, rows);
 };
@@ -1758,7 +1821,7 @@ VIEWS.staff = function(){
     `<div class="card"><div class="twrap">${S.staff.length ? `<table>
       <tr><th>名前</th><th>役職</th><th>状態</th><th>給与形態</th><th class="num">基本額</th><th class="num">歩合率</th><th></th></tr>
       ${S.staff.map(st => `<tr${st.retireM ? ' style="opacity:.65"' : ""}>
-        <td style="font-weight:600">${esc(st.name)}${st.owner ? ' <span class="chip info">事業主</span>' : ""}</td>
+        <td style="font-weight:600">${esc(st.name)}${st.owner === "1" ? ' <span class="chip info">事業主</span>' : st.owner === "family" ? ' <span class="chip mut">家族(専従者)</span>' : ""}</td>
         <td>${esc(st.role)}</td>
         <td style="white-space:nowrap">${st.retireM ? `<span class="chip mut">退社(${fmtMonth(st.retireM)}まで)</span>` : '<span class="chip good">在籍</span>'}</td>
         <td>${st.payType === "monthly" ? "月給" : "時給"}</td>
@@ -1766,13 +1829,13 @@ VIEWS.staff = function(){
         <td class="num">${num(st.commission)}%</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editStaff('${st.id}')">編集</button><button class="btn sm ghost" onclick="delStaff('${st.id}')">削除</button></td>
       </tr>`).join("")}</table>` : `<div class="empty">スタッフが未登録です。「+ スタッフを追加」から登録してください。</div>`}</div>
-    <div class="hint">あなた自身の給料もここで管理している場合は、区分を<strong>「事業主本人」</strong>にしてください。事業主の給料は税金の計算では経費にならないため、納税予想が自動で足し戻して計算します(日々の利益表示は今までどおりです)。退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
+    <div class="hint">あなた自身の給料もここで管理している場合は、区分を<strong>「事業主本人」</strong>にしてください。事業主の給料は税金の計算では経費にならないため、納税予想が自動で足し戻して計算します(日々の利益表示は今までどおりです)。<strong>家族に給料を払っている場合は「家族従業員(専従者)」</strong>にしてください。家族の給料は「青色事業専従者給与の届出」を税務署に出した範囲内でのみ経費になり、届出をした家族は配偶者控除・扶養控除の対象外、雇用保険の対象外です。従業員を1人でも雇うと労災保険は加入義務、週20時間以上なら雇用保険も義務です。退社したスタッフは削除せず「編集」で<strong>退社月</strong>を入れてください。在籍していた月の給料管理・給与明細には引き続き表示され、退社後の月には出なくなります(過去の給与履歴が残ります)。</div></div>`;
 };
 function staffFields(){
   return [
     {key:"name", label:"名前", type:"text", required:true},
     {key:"role", label:"役職", type:"select", options:["スタイリスト","トップスタイリスト","アシスタント","レセプション","店長","オーナー"]},
-    {key:"owner", label:"区分(税金の計算に影響)", type:"select", options:[["","従業員(給料は経費になる)"],["1","事業主(オーナー)本人(給料は経費にならない)"]]},
+    {key:"owner", label:"区分(税金の計算に影響)", type:"select", options:[["","従業員(給料は経費になる)"],["family","家族従業員(青色事業専従者。届出の範囲内で経費)"],["1","事業主(オーナー)本人(給料は経費にならない)"]]},
     {key:"payType", label:"給与形態", type:"select", options:[["hourly","時給"],["monthly","月給"]], half:true},
     {key:"wage", label:"時給/月給(円)", type:"number", required:true, min:0, half:true},
     {key:"commission", label:"歩合率(担当売上に対する%)", type:"number", value:0, min:0, step:"0.5"},
@@ -1805,7 +1868,7 @@ window.editStaff = function(id){
     } });
 };
 window.delStaff = function(id){
-  ask("このスタッフを削除しますか?(シフト・給与の記録も表示されなくなります)", () => {
+  ask("このスタッフを削除しますか?(シフト・給与の記録も表示されなくなります。賃金台帳は法律で3年間の保存義務があるため、退社したスタッフは削除せず「退社月」の設定をおすすめします)", () => {
     S.staff = S.staff.filter(x => x.id !== id); save(); toast("削除しました"); render();
   });
 };
@@ -2648,11 +2711,15 @@ VIEWS.payslip = function(){
       <div class="twrap"><table>
         <tr><td style="color:var(--muted);width:200px">対象期間(${payCloseLabel()}締め)</td><td class="num">${fmtDate(pp.from)} 〜 ${fmtDate(pp.to)}</td></tr>
         <tr><td style="color:var(--muted)">支払日(${payDayLabel()}払い)</td><td class="num">${fmtDate(payDate(m))}</td></tr>
-        <tr><td style="color:var(--muted)">勤務時間</td><td class="num">${p.hours.toFixed(1)}h</td></tr>
+        <tr><td style="color:var(--muted)">労働日数 / 勤務時間</td><td class="num">${p.days}日 / ${p.hours.toFixed(1)}h${p.otH > 0 || p.nightH > 0 ? `(うち時間外${p.otH.toFixed(1)}h・深夜${p.nightH.toFixed(1)}h)` : ""}</td></tr>
         <tr><td style="color:var(--muted)">基本給(${P.payType === "monthly" ? "月給" : "時給 " + yen(P.wage)})</td><td class="num">${yen(p.base)}</td></tr>
+        ${p.extra ? `<tr><td style="color:var(--muted)">割増賃金(時間外・深夜 25%増)</td><td class="num">${yen(p.extra)}</td></tr>` : ""}
         <tr><td style="color:var(--muted)">歩合(担当売上 ${yen(p.sales)} × ${num(P.commission)}%)</td><td class="num">${yen(p.comm)}</td></tr>
-        <tr><td style="color:var(--muted)">手当</td><td class="num">${yen(p.allow)}</td></tr>
-        <tr><td style="color:var(--muted)">控除</td><td class="num">${p.deduct ? "−" + yen(p.deduct).slice(1) : yen(0)}</td></tr>
+        ${p.commute ? `<tr><td style="color:var(--muted)">通勤手当(非課税)</td><td class="num">${yen(p.commute)}</td></tr>` : ""}
+        <tr><td style="color:var(--muted)">${p.commute ? "その他手当" : "手当"}</td><td class="num">${yen(p.allowOther)}</td></tr>
+        ${p.srcTax ? `<tr><td style="color:var(--muted)">源泉所得税</td><td class="num">−${yen(p.srcTax)}</td></tr>` : ""}
+        ${p.empIns ? `<tr><td style="color:var(--muted)">雇用保険料</td><td class="num">−${yen(p.empIns)}</td></tr>` : ""}
+        <tr><td style="color:var(--muted)">${p.srcTax || p.empIns ? "その他控除" : "控除"}</td><td class="num">${p.deductOther ? "−" + yen(p.deductOther) : yen(0)}</td></tr>
         <tr class="total"><td>差引支給額</td><td class="num">${yen(p.total)}</td></tr>
       </table></div>
       <div class="hint">${esc(S.settings.name)} ・ 発行日 ${fmtDate(todayStr())}${p.memo ? " ・ " + esc(p.memo) : ""}</div>
@@ -2782,8 +2849,8 @@ const DED_ITEMS = [
   ["kyosai", "小規模企業共済・iDeCo", "掛金の年間合計。全額引けます", 0],
   ["seimei", "生命保険料控除", "上限12万円(超えた分は自動で12万円に丸めます)", 120000],
   ["jishin", "地震保険料控除", "上限5万円", 50000],
-  ["haigu", "配偶者控除・配偶者特別控除", "一般は38万円(配偶者の収入により変動)", 0],
-  ["fuyo", "扶養控除", "扶養家族1人につき38万円(19〜22歳は63万円)の合計", 0],
+  ["haigu", "配偶者控除・配偶者特別控除", "一般は38万円(配偶者の収入により変動)。給料を払っている家族(専従者)は対象外", 0],
+  ["fuyo", "扶養控除", "扶養家族1人につき38万円(19〜22歳は63万円)の合計。給料を払っている家族(専従者)は対象外", 0],
   ["iryo", "医療費控除", "支払った医療費 − 保険金 − 10万円", 0],
   ["kifu", "寄附金控除", "ふるさと納税など: 寄附額 − 2,000円", 0],
   ["sonota", "その他の所得控除", "上記にない控除があれば合計額を", 0]
@@ -2805,7 +2872,7 @@ function yearTaxBase(yr){
     if(m > cur) break; // 未来の月は月給スタッフの給料だけ乗ってしまうため含めない
     const s = monthSummary(m);
     inc += s.inc; retail += s.retail; profit += s.profit;
-    S.staff.filter(st => st.owner && staffActiveIn(st, m)).forEach(st => { ownerPay += calcPay(st, m).total; });
+    S.staff.filter(st => st.owner === "1" && staffActiveIn(st, m)).forEach(st => { ownerPay += calcPay(st, m).total; });
   }
   return { inc, retail, profit, ownerPay };
 }
@@ -2831,7 +2898,7 @@ function personalTaxes(base, ded, jutaku){
 }
 function calcTaxes(b, cfg, yr){
   const flr = (v, u) => Math.floor(Math.max(0, v) / u) * u;
-  const blue = cfg.type === "blue65" ? 650000 : cfg.type === "blue10" ? 100000 : 0;
+  const blue = cfg.type === "blue65" ? 650000 : cfg.type === "blue55" ? 550000 : cfg.type === "blue10" ? 100000 : 0;
   const blueUsed = Math.min(blue, Math.max(0, b.profit)); // 控除は利益が上限(マイナスにはならない)
   const biz = Math.max(0, b.profit) - blueUsed;           // 青色控除後の事業所得
   const ded = dedTotal(cfg);
@@ -2917,7 +2984,8 @@ function corpCompareCardHtml(profit, t, cfg, isProj){
     <div style="margin-top:10px;font-size:13.5px">${verdict}</div>
     <div class="hint">・役員報酬は原則、事業年度の途中で変えられません(毎月同額)。金額を変えて何パターンか試してみてください。<br>
     ・${shakaiIn ? "" : "<strong>個人側の国保・年金が未入力です。</strong>下の「前提の設定」で入力すると公平な比較になります。<br>・"}この表に<strong>税理士費用(年20〜40万円ほど)・登記費用・事務負担の増加</strong>は含まれていません。差額がこれより小さいうちは急がなくてよい水準です。<br>
-    ・厚生年金は国保・年金より高い代わりに、将来の年金額が増える・扶養家族の保険料が不要になるなどの利点もあります。<br>
+    ・厚生年金は国保・年金より高い代わりに、将来の年金額が増える・扶養家族の保険料が不要になるなどの利点もあります(40歳未満は介護保険分がない分、表より少し安くなります)。<br>
+    ・個人のままの場合、国民健康保険料は利益が増えるほど上がります(上限あり)。「社会保険」欄に入れた金額が古いと個人側が有利に見えすぎる点にご注意ください。<br>
     ・消費税はどちらにも含めていません(新しく作った法人は条件を満たせば約2年免税。個人のままなら課税開始年から納付)。<br>
     ・法人化は影響が大きいため、実行前に必ず税理士さんにご相談ください。</div>
   </div>`;
@@ -2949,8 +3017,9 @@ VIEWS.tax = function(){
   const projB = canProj ? mkBase(v => Math.round(v / doy * diy)) : null;
   const projT = projB ? calcTaxes(projB, cfg, yr) : null;
   const mainB = projB || actB;
-  const ownerSet = S.staff.some(st => st.owner && !st.retireM);
-  const typeLabel = { blue65: "青色申告(65万円控除)", blue10: "青色申告(10万円控除)", white: "白色申告" }[cfg.type];
+  const ownerSet = S.staff.some(st => st.owner === "1" && !st.retireM);
+  const hasFamily = S.staff.some(st => st.owner === "family" && !st.retireM);
+  const typeLabel = { blue65: "青色申告(65万円控除)", blue55: "青色申告(55万円控除)", blue10: "青色申告(10万円控除)", white: "白色申告" }[cfg.type];
   const main = projT || actT;
   /* 消費税の状態ラベル(免税期間なら「◯年分から課税予定」) */
   const ctMethod = { kanni: "簡易課税", "2wari": "インボイス2割特例" }[cfg.ct] || "";
@@ -2966,9 +3035,12 @@ VIEWS.tax = function(){
       : cfg.ct === "kanni" ? "簡易課税: 技術売上の消費税の50%+店販の20%を納付" : cfg.ct === "2wari" ? "売上にかかる消費税の20%を納付" : "免税事業者のため納付なし"]
   ];
   const noData = act.inc === 0 && act.profit === 0;
+  const ctMismatch = cfg.ct === "2wari" && num(cfg.ctFrom) >= 2027
+    ? `<div class="card" style="border-color:var(--crit)"><div class="alertline"><span class="chip crit">設定の確認</span>「インボイス2割特例」は2026年分の申告で終了する制度のため、2027年以降の課税開始との組み合わせは通常ありえません。簡易課税(要届出)への変更をご検討ください。</div></div>` : "";
   $("main").innerHTML =
     pageHead("納税予想(概算)", `${yr}年分 = ${yr}年1月〜12月のもうけに対する税金。納付は主に${yr + 1}年です`,
       `<span class="mnav"><button class="btn sm" onclick="taxNav(-1)" aria-label="前年">‹</button><span class="mn-label">${yr}年分</span><button class="btn sm" onclick="taxNav(1)" ${yr >= curYr ? "disabled" : ""} aria-label="翌年">›</button></span>`) +
+    ctMismatch +
     (noData ? `<div class="card"><div class="empty">${yr}年の売上・利益データがまだありません。収支を記録するか、「過去実績のまとめ入力」で月ごとの合計を入れると予想額が表示されます。</div></div>` :
     `<div class="card hero">
       <div class="hr-label">${yr}年分の予想納税額 合計${projT ? "(年末までこのペースの場合)" : ""}</div>
@@ -2978,7 +3050,7 @@ VIEWS.tax = function(){
         <span>毎月の積立目安 <strong>${yen(Math.ceil(main.total / 12 / 1000) * 1000)}</strong></span>
         <span>前提: ${typeLabel} ・ ${ctLabel}</span>
       </div>
-      <div class="hint">納税資金は「毎月の積立目安」を売上から取り分けておくと、納付月に慌てません。</div>
+      <div class="hint">納税資金は「毎月の積立目安」を売上から取り分けておくと、納付月に慌てません。<strong>国民健康保険料はこの表とは別に、利益の約1割(上限あり)</strong>で翌年増えます。こちらも見込んでおくと安心です。</div>
     </div>
     <div class="card"><h2>税金の内訳</h2>
       <div class="twrap"><table>
@@ -3001,26 +3073,29 @@ VIEWS.tax = function(){
         <tr><td style="color:var(--muted)">基礎控除(誰でも引けます)</td><td class="num">− ${yen(580000)}</td></tr>
         <tr class="total"><td>所得税の課税所得</td><td class="num">${yen(main.taxable)}</td></tr>
       </table></div>
-      <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。${main.jutakuUsed ? `<br>住宅ローン控除 <strong>${yen(main.jutakuUsed)}</strong> は課税所得からではなく、<strong>税額そのもの</strong>(所得税、引き切れない分は住民税から最大97,500円)から差し引いています。` : ""}${!ownerSet && S.staff.length ? `<br><strong>あなた自身の給料もスタッフとして払っている場合</strong>は、<a href="javascript:void(0)" onclick="go('staff')" style="color:var(--info)">スタッフ登録</a>でその人の区分を「事業主本人」にしてください。事業主の給料は経費にできないため、ここで自動的に足し戻して計算します。` : ""}</div>
+      <div class="hint">この「課税所得」に税率をかけて所得税が決まります。住民税は基礎控除が43万円のため少し高い所得で計算されます。${main.jutakuUsed ? `<br>住宅ローン控除 <strong>${yen(main.jutakuUsed)}</strong> は課税所得からではなく、<strong>税額そのもの</strong>(所得税、引き切れない分は住民税から最大97,500円)から差し引いています。` : ""}${!ownerSet && S.staff.length ? `<br><strong>あなた自身の給料もスタッフとして払っている場合</strong>は、<a href="javascript:void(0)" onclick="go('staff')" style="color:var(--info)">スタッフ登録</a>でその人の区分を「事業主本人」にしてください。事業主の給料は経費にできないため、ここで自動的に足し戻して計算します。` : ""}${hasFamily ? `<br><strong>家族従業員(専従者)の給料</strong>は「青色事業専従者給与の届出」を出した範囲内でのみ経費になります。届出をしていない場合、実際の税額はこの表示より高くなります。また給料を払った家族は配偶者控除・扶養控除に入れられません。` : ""}${!main.exempt && main.shohi > 0 ? `<br>納める消費税(${yen(main.shohi)})は実際には経費にできるため、その分の所得税・住民税は表示より少し安くなります。` : ""}</div>
     </div>` + corpCompareCardHtml(mainB.profit, main, cfg, !!projT)) +
     `<div class="card"><h2>前提の設定 <span class="h2-sub">変えて「保存」するとその場で計算し直します</span></h2>
       <div class="f-2col" style="max-width:640px">
         <div class="f-row"><label for="set-tax-type">申告の種類</label>
           <select id="set-tax-type">
-            <option value="blue65" ${cfg.type === "blue65" ? "selected" : ""}>青色申告(65万円控除)</option>
-            <option value="blue10" ${cfg.type === "blue10" ? "selected" : ""}>青色申告(10万円控除)</option>
+            <option value="blue65" ${cfg.type === "blue65" ? "selected" : ""}>青色申告(65万円控除・e-Tax申告)</option>
+            <option value="blue55" ${cfg.type === "blue55" ? "selected" : ""}>青色申告(55万円控除・紙で申告)</option>
+            <option value="blue10" ${cfg.type === "blue10" ? "selected" : ""}>青色申告(10万円控除・簡易な帳簿)</option>
             <option value="white" ${cfg.type === "white" ? "selected" : ""}>白色申告(控除なし)</option>
-          </select></div>
+          </select>
+          <div class="hint">65万円控除は「複式簿記の帳簿+貸借対照表+<strong>e-Taxでの申告</strong>(または電子帳簿保存)+期限内申告」がすべて必要です。紙で出すと55万円になります。</div></div>
         <div></div>
         <div class="f-row"><label for="set-tax-ct">消費税の納め方</label>
           <select id="set-tax-ct">
-            <option value="kanni" ${cfg.ct === "kanni" ? "selected" : ""}>簡易課税</option>
-            <option value="2wari" ${cfg.ct === "2wari" ? "selected" : ""}>インボイス2割特例</option>
+            <option value="kanni" ${cfg.ct === "kanni" ? "selected" : ""}>簡易課税(事前の届出が必要)</option>
+            <option value="2wari" ${cfg.ct === "2wari" ? "selected" : ""}>インボイス2割特例(登録者向け・2026年分まで)</option>
             <option value="none" ${cfg.ct === "none" ? "selected" : ""}>納めない(ずっと免税)</option>
-          </select></div>
+          </select>
+          <div class="hint">${cfg.ct === "kanni" ? `<strong>簡易課税は「課税が始まる年の前年末まで」に「簡易課税制度選択届出書」を税務署へ出さないと使えません</strong>(例: ${num(cfg.ctFrom) || "課税開始年"}年分から使うなら${num(cfg.ctFrom) ? num(cfg.ctFrom) - 1 : "前"}年12月末まで)。届出を忘れると帳簿の大変な原則課税になり、納税額も大きく増えがちです。` : cfg.ct === "2wari" ? "2割特例はインボイス登録がきっかけで課税事業者になった人だけの制度で、個人は2026年分の申告で終了します。" : "免税でもインボイス登録すると課税事業者になります。"}</div></div>
         <div class="f-row"><label for="set-tax-from">課税事業者になる年(その年の分から計算)</label>
           <input id="set-tax-from" type="number" inputmode="numeric" min="2000" max="2100" step="1" value="${num(cfg.ctFrom) > 0 ? num(cfg.ctFrom) : ""}" placeholder="例: 2027(空欄なら全部の年で計算)">
-          <div class="hint">この年より前の分の消費税は0円(免税)として扱います。インボイス登録をしない場合、課税が始まるのは「2年前の売上が1,000万円を超えた年」からです(ずっと1,000万円以下なら左の欄を「納めない」に)。</div></div>
+          <div class="hint">この年より前の分の消費税は0円(免税)として扱います。インボイス登録をしない場合、課税が始まるのは「2年前の売上が1,000万円を超えた年」からです(ずっと1,000万円以下なら左の欄を「納めない」に)。<strong>前年1〜6月の売上と給与支払額がどちらも1,000万円を超えた場合は1年早く課税になることがあります(特定期間)</strong>。</div></div>
       </div>
       <h2 style="margin-top:16px">所得控除(もうけから引けるもの) <span class="h2-sub">年間の金額を円で入力。空欄=なし</span></h2>
       <div class="f-2col" style="max-width:640px">
@@ -3042,8 +3117,10 @@ VIEWS.tax = function(){
       <div class="alertline"><span class="chip info">消費税</span>${yr + 1}年3月31日までに申告・納付</div>
       <div class="alertline"><span class="chip info">住民税</span>${yr + 1}年6月から年4回に分けて納付(納付書が届きます)</div>
       <div class="alertline"><span class="chip info">個人事業税</span>${yr + 1}年8月と11月の2回(利益290万円以下なら請求されません)</div>
+      ${main.shotoku >= 150000 ? `<div class="alertline"><span class="chip warn">予定納税</span>所得税が15万円以上のため、<strong>${yr + 1}年の7月と11月にも前払い(各 約${yen(Math.round(main.shotoku / 3 / 1000) * 1000)})</strong>があります。3月で終わりではないので資金を残しておいてください</div>` : ""}
+      ${!main.exempt && main.shohi > 480000 ? `<div class="alertline"><span class="chip warn">中間納付</span>消費税が48万円を超えたため、翌年は8月ごろに中間納付(前払い)もあります</div>` : ""}
     </div>
-    <div class="hint">※ この金額は帳簿上の利益から機械的に計算した<strong>概算の目安</strong>です(基礎控除58万円など${curYr}年時点の税制で計算)。扶養の状況・各種控除・売上の税率区分などで実際の税額は変わります。申告時は税務署の案内や税理士さんにご確認ください。<br>
+    <div class="hint">※ この金額は帳簿上の利益から機械的に計算した<strong>概算の目安</strong>です(基礎控除58万円など${curYr}年時点の税制で計算)。住民税は控除額が所得税より少し小さいため実際はやや高く、2025・2026年分は基礎控除の上乗せ特例により実際はやや安くなる場合があります。扶養の状況・各種控除・売上の税率区分などで実際の税額は変わります。申告時は税務署の案内や税理士さんにご確認ください。<br>
     ※ この計算は<strong>個人事業主向け</strong>です。法人化(会社設立)した場合は法人税の計算になるため、この画面の金額は当てはまりません。<br>
     ※ <strong>家族に払う給料</strong>は「青色事業専従者給与に関する届出」を出している場合だけ経費にできます。届出をしていない場合、その分も実際は経費になりません(この画面では従業員としてそのまま計算しています)。該当しそうなら税務署・税理士さんにご確認ください。</div>`;
 };
@@ -3060,6 +3137,9 @@ VIEWS.settings = function(){
       <div class="f-row" style="max-width:320px"><label for="set-target">月間売上目標(円)</label>
       <input id="set-target" type="number" inputmode="numeric" min="0" step="10000" value="${num(S.settings.target) > 0 ? num(S.settings.target) : ""}" placeholder="例: 800000">
       <div class="hint">設定するとダッシュボードに達成メーターが表示されます。空欄で非表示。</div></div>
+      <div class="f-row" style="max-width:320px"><label for="set-minwage">地域の最低賃金(円/時)</label>
+      <input id="set-minwage" type="number" inputmode="numeric" min="0" value="${num(S.settings.minWage) > 0 ? num(S.settings.minWage) : ""}" placeholder="例: 1163(都道府県ごとに毎年10月改定)">
+      <div class="hint">設定すると、給料管理で時給や月給の時給換算が最低賃金を下回ったとき警告が出ます。</div></div>
       <button class="btn pri" onclick="saveSettings()">保存</button>
     </div>
     <div class="card"><h2>月別の売上目標 <span class="h2-sub">繁忙月・閑散月で目標を変えたいときに</span></h2>
@@ -3135,6 +3215,7 @@ VIEWS.settings = function(){
 window.saveSettings = function(){
   S.settings.name = $("set-name").value || "マイサロン";
   S.settings.target = Math.max(0, num($("set-target").value));
+  S.settings.minWage = Math.max(0, num($("set-minwage").value));
   save(); toast("保存しました"); render();
 };
 /* 締日・支払日の選択肢: 1〜28日+末日(29〜31日は月により存在しないため末日として扱う) */
