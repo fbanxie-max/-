@@ -1852,9 +1852,9 @@ window.saveSperf = function(){
   S.staff.filter(st => staffActiveIn(st, m)).forEach(st => {
     const g = k => Math.max(0, num(($("sp-" + k + "-" + st.id) || {}).value));
     const memoEl = $("sp-memo-" + st.id);
-    const v = { sales: g("sales"), retail: g("retail"), customers: g("customers"), newCust: g("new"), nom: g("nom"), memo: memoEl ? memoEl.value : "" };
+    const v = { sales: g("sales"), retail: g("retail"), nomSales: g("nomsales"), customers: g("customers"), newCust: g("new"), nom: g("nom"), memo: memoEl ? memoEl.value : "" };
     const key = st.id + "_" + m;
-    if(v.sales || v.retail || v.customers || v.newCust || v.nom || v.memo){ S.staffStats[key] = v; n++; }
+    if(v.sales || v.retail || v.nomSales || v.customers || v.newCust || v.nom || v.memo){ S.staffStats[key] = v; n++; }
     else delete S.staffStats[key]; // 全部空にして保存すると削除(自動集計に戻る)
   });
   save(); toast(n ? `${fmtMonth(m)}のスタッフ実績を保存しました(歩合・スタッフ別売上に反映されます)` : "入力が空だったため、自動集計に戻しました"); render();
@@ -1870,6 +1870,7 @@ VIEWS.sperf = function(){
       <td style="font-weight:600;white-space:nowrap">${esc(st.name)}${auto ? `<div style="font-size:11px;color:var(--muted)">自動集計 ${yen(auto)}</div>` : ""}</td>
       <td class="num">${inp("sales", man.sales)}</td>
       <td class="num">${inp("retail", man.retail)}</td>
+      <td class="num">${inp("nomsales", man.nomSales)}</td>
       <td class="num">${inp("customers", man.customers, 76)}</td>
       <td class="num">${inp("new", man.newCust, 76)}</td>
       <td class="num">${inp("nom", man.nom, 76)}</td>
@@ -1886,14 +1887,14 @@ VIEWS.sperf = function(){
     return { st, tot: mergedStaffSales(st.id, m),
       prev: mergedStaffSales(st.id, addMonths(m, -1)), py: mergedStaffSales(st.id, addMonths(m, -12)),
       days: shiftDays(st.id, m), pay: p.total, comm: p.comm,
-      retail: num(man.retail), cust: num(man.customers), nw: num(man.newCust), nom: num(man.nom) };
+      retail: num(man.retail), nomSales: num(man.nomSales), cust: num(man.customers), nw: num(man.newCust), nom: num(man.nom) };
   }).filter(x => x.tot > 0 || x.cust > 0);
   const sum = anal.reduce((a, x) => a + x.tot, 0);
   const pct = (a, b) => b > 0 ? Math.round(a / b * 100) + "%" : "—";
   const analCard = anal.length ? `<div class="card"><h2>${fmtMonth(m)}の分析</h2>
       ${hbarHtml(anal.map(x => [x.st.name, x.tot]).sort((a, b) => b[1] - a[1]), sum, "var(--income)")}
       <div class="twrap" style="margin-top:14px"><table>
-        <tr><th>スタッフ</th><th class="num">売上</th><th class="num">前月比</th><th class="num">前年比</th><th class="num">客数</th><th class="num">客単価</th><th class="num">新規率</th><th class="num">再来率</th><th class="num">指名率</th><th class="num">店販比率</th><th class="num">1日あたり売上</th><th class="num">労働分配率</th><th class="num">歩合(参考)</th></tr>
+        <tr><th>スタッフ</th><th class="num">売上</th><th class="num">前月比</th><th class="num">前年比</th><th class="num">客数</th><th class="num">客単価</th><th class="num">新規率</th><th class="num">再来率</th><th class="num">指名率</th><th class="num">指名売上比率</th><th class="num">店販比率</th><th class="num">1日あたり売上</th><th class="num">労働分配率</th><th class="num">歩合(参考)</th></tr>
         ${anal.map(x => `<tr>
           <td style="font-weight:600;white-space:nowrap">${esc(x.st.name)}</td>
           <td class="num" style="font-weight:600">${yen(x.tot)}</td>
@@ -1904,13 +1905,14 @@ VIEWS.sperf = function(){
           <td class="num">${pct(x.nw, x.cust)}</td>
           <td class="num">${x.cust ? pct(x.cust - x.nw, x.cust) : "—"}</td>
           <td class="num">${pct(x.nom, x.cust)}</td>
+          <td class="num">${x.nomSales > 0 ? `${pct(x.nomSales, x.tot)}<div style="font-size:11px;color:var(--muted)">${yen(x.nomSales)}</div>` : "—"}</td>
           <td class="num">${pct(x.retail, x.tot)}</td>
           <td class="num">${x.days > 0 ? yen(Math.round(x.tot / x.days)) + `<span style="color:var(--muted);font-size:11px">/${x.days}日</span>` : "—"}</td>
           <td class="num">${x.tot > 0 && x.pay > 0 ? Math.round(x.pay / x.tot * 100) + "%" : "—"}</td>
           <td class="num">${yen(x.comm)}</td>
         </tr>`).join("")}
       </table></div>
-      <div class="hint">目安: <strong>店販比率</strong>は8〜10%あると物販が強い店。<strong>指名率</strong>はファンの付き具合、<strong>新規率</strong>は集客の元気さ、<strong>再来率</strong>(100%−新規率)は常連の厚み。<strong>労働分配率</strong>(給料÷売上)は美容室では40〜60%が一般的な目安です。<strong>1日あたり売上</strong>はシフトの出勤日数から計算します(シフト未入力の月は「—」)。客単価が下がっているスタッフにはメニュー提案の練習を、など打ち手につなげてください。</div>
+      <div class="hint">目安: <strong>店販比率</strong>は8〜10%あると物販が強い店。<strong>指名率</strong>(客数ベース)と<strong>指名売上比率</strong>(金額ベース: 総売上のうち指名のお客様からの売上)はファンの付き具合=個人の看板力、<strong>新規率</strong>は集客の元気さ、<strong>再来率</strong>(100%−新規率)は常連の厚み。<strong>労働分配率</strong>(給料÷売上)は美容室では40〜60%が一般的な目安です。<strong>1日あたり売上</strong>はシフトの出勤日数から計算します(シフト未入力の月は「—」)。客単価が下がっているスタッフにはメニュー提案の練習を、など打ち手につなげてください。</div>
     </div>` : "";
   /* 推移: 直近6ヶ月のスタッフ別売上(店全体の売上に対する貢献度%つき) */
   const months = lastMonths(6, m);
@@ -1925,7 +1927,7 @@ VIEWS.sperf = function(){
       `${monthNav(m, "sperfNav")}<button class="btn pri" onclick="saveSperf()">保存</button>`) +
     (list.length ? `<div class="card"><h2>${fmtMonth(m)}の実績を入力 <span class="h2-sub">全部埋めなくてOK。月の途中でも、同じ月は上書き</span></h2>
       <div class="twrap"><table>
-        <tr><th>スタッフ</th><th class="num">技術売上(円)</th><th class="num">店販売上(円)</th><th class="num">客数</th><th class="num">うち新規</th><th class="num">指名客数</th><th>メモ</th></tr>
+        <tr><th>スタッフ</th><th class="num">技術売上(円)</th><th class="num">店販売上(円)</th><th class="num">うち指名売上(円)</th><th class="num">客数</th><th class="num">うち新規</th><th class="num">指名客数</th><th>メモ</th></tr>
         ${rows}
       </table></div>
       <div style="margin-top:12px"><button class="btn pri" onclick="saveSperf()">保存</button></div>
