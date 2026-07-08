@@ -1888,6 +1888,85 @@ window.saveSperf = function(){
   });
   save(); toast(n ? `${fmtMonth(m)}のスタッフ実績を保存しました(歩合・スタッフ別売上に反映されます)` : "入力が空だったため、自動集計に戻しました"); render();
 };
+/* ---- サロンボードCSV取り込み ----
+   「スタイリスト別」集計CSV(スタイリスト名/総売上/内技術・店販・その他/客単価/総客数/内新規・固定/指名売上/指名数)を読み込み、
+   スタッフ実績の月次まとめとして保存する。文字コードはShift_JIS/UTF-8を自動判別。
+   名前の照合は空白(全角・半角)を無視して行う。CSVには期間が入っていないため、対象月は取り込み時に選ぶ */
+function parseSalonBoardCsv(text){
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if(!lines.length) return { error: "空のファイルです" };
+  const cells = l => l.split(",").map(c => c.replace(/^"|"$/g, "").trim());
+  const head = cells(lines[0]);
+  const idx = pred => head.findIndex(pred);
+  const iName = idx(h => h.includes("スタイリスト"));
+  const iTotal = idx(h => h === "総売上" || (h.startsWith("総売上") && !h.includes("内")));
+  const iTech = idx(h => h.startsWith("総売上") && h.includes("技術"));
+  const iRetail = idx(h => h.startsWith("総売上") && h.includes("店販"));
+  const iOther = idx(h => h.startsWith("総売上") && h.includes("その他"));
+  const iCust = idx(h => h === "総客数" || (h.startsWith("総客数") && !h.includes("内")));
+  const iNew = idx(h => h.startsWith("総客数") && h.includes("新規"));
+  const iNomSales = idx(h => h === "指名売上" || (h.startsWith("指名売上") && !h.includes("内")));
+  const iNom = idx(h => h.includes("指名数"));
+  if(iName < 0 || iTotal < 0) return { error: "サロンボードの「スタイリスト別」CSVではないようです(スタイリスト名・総売上の列が見つかりません)" };
+  const rows = [];
+  for(let i = 1; i < lines.length; i++){
+    const c = cells(lines[i]);
+    const name = (c[iName] || "").trim();
+    if(!name || name === "店舗全体" || name === "合計") continue;
+    const g = j => j >= 0 ? Math.max(0, num(c[j])) : 0;
+    const total = g(iTotal), retail = g(iRetail);
+    /* このアプリの「技術売上」= 総売上 − 店販(その他も技術側に含めて合計を一致させる) */
+    const tech = iTech >= 0 ? g(iTech) + g(iOther) : Math.max(0, total - retail);
+    rows.push({ name, sales: tech, retail, nomSales: g(iNomSales), customers: g(iCust), newCust: g(iNew), nom: g(iNom), total });
+  }
+  return rows.length ? { rows } : { error: "データの行が見つかりませんでした" };
+}
+const normName = s2 => String(s2 || "").replace(/[\s\u3000]/g, "");
+window.importSalonBoard = function(input){
+  const file = input.files && input.files[0]; if(!file) return;
+  input.value = "";
+  const rd = new FileReader();
+  rd.onload = () => {
+    let text = "";
+    try{ text = new TextDecoder("shift_jis").decode(rd.result); }catch(e){}
+    /* Shift_JISで読んで列名が見つからなければUTF-8で読み直す */
+    if(!text.includes("スタイリスト")){
+      try{ const t2 = new TextDecoder("utf-8").decode(rd.result); if(t2.includes("スタイリスト")) text = t2; }catch(e){}
+    }
+    const p = parseSalonBoardCsv(text);
+    if(p.error){ toast(p.error); return; }
+    window._sbRows = p.rows;
+    const matched = p.rows.filter(r => S.staff.some(st => normName(st.name) === normName(r.name) && !st.retireM));
+    const unmatched = p.rows.filter(r => !S.staff.some(st => normName(st.name) === normName(r.name) && !st.retireM));
+    openModal(`<h3>サロンボードCSVの取り込み</h3>
+      <div class="f-row" style="max-width:220px"><label for="sb-month">どの月の実績ですか?</label><input id="sb-month" type="month" value="${V.sperfMonth}"></div>
+      <div class="twrap"><table>
+        <tr><th>スタイリスト</th><th class="num">総売上</th><th class="num">客数</th><th class="num">指名売上</th><th>取り込み</th></tr>
+        ${p.rows.map(r => {
+          const hit = S.staff.some(st => normName(st.name) === normName(r.name) && !st.retireM);
+          return `<tr><td style="font-weight:600">${esc(r.name)}</td><td class="num">${yen(r.total)}</td><td class="num">${r.customers}人</td><td class="num">${yen(r.nomSales)}</td>
+            <td>${hit ? '<span class="chip good">取り込む</span>' : '<span class="chip mut">対象外</span>'}</td></tr>`;
+        }).join("")}
+      </table></div>
+      ${unmatched.length ? `<div class="hint">「対象外」はスタッフ登録に同じ名前がいないため取り込みません(取り込みたい場合は、スタッフ登録の名前をCSVの表記に合わせてください。空白の違いは無視されます)。</div>` : ""}
+      <div class="hint">同じ月にすでに入力がある場合は上書きされます。店の売上には足されません(分析・歩合用)。</div>
+      <div class="m-foot"><button class="btn" onclick="closeModal()">キャンセル</button>
+      <button class="btn pri" onclick="applySalonBoard()" ${matched.length ? "" : "disabled"}>${matched.length}名分を取り込む</button></div>`);
+  };
+  rd.readAsArrayBuffer(file);
+};
+window.applySalonBoard = function(){
+  const m = ($("sb-month") || {}).value || V.sperfMonth;
+  let n = 0;
+  (window._sbRows || []).forEach(r => {
+    const st = S.staff.find(x => normName(x.name) === normName(r.name) && !x.retireM);
+    if(!st) return;
+    S.staffStats[st.id + "_" + m] = { sales: r.sales, retail: r.retail, nomSales: r.nomSales, customers: r.customers, newCust: r.newCust, nom: r.nom, memo: "サロンボード取込" };
+    n++;
+  });
+  V.sperfMonth = m;
+  closeModal(); save(); toast(`${fmtMonth(m)}のスタッフ実績を${n}名分取り込みました`); render();
+};
 VIEWS.sperf = function(){
   const m = V.sperfMonth;
   const list = S.staff.filter(st => staffActiveIn(st, m));
@@ -1954,7 +2033,7 @@ VIEWS.sperf = function(){
   }).join("");
   $("main").innerHTML =
     pageHead("スタッフ実績(月次まとめ)", "月末や気が向いたときに、スタッフごとの売上・客数をまとめて入力して分析できます",
-      `${monthNav(m, "sperfNav")}<button class="btn pri" onclick="saveSperf()">保存</button>`) +
+      `${monthNav(m, "sperfNav")}<label class="btn" style="cursor:pointer">サロンボードCSVを取り込む<input type="file" accept=".csv,text/csv" style="display:none" onchange="importSalonBoard(this)"></label><button class="btn pri" onclick="saveSperf()">保存</button>`) +
     (list.length ? `<div class="card"><h2>${fmtMonth(m)}の実績を入力 <span class="h2-sub">全部埋めなくてOK。月の途中でも、同じ月は上書き</span></h2>
       <div class="twrap"><table>
         <tr><th>スタッフ</th><th class="num">技術売上(円)</th><th class="num">店販売上(円)</th><th class="num">うち指名売上(円)</th><th class="num">客数</th><th class="num">うち新規</th><th class="num">指名客数</th><th>メモ</th></tr>
@@ -1963,7 +2042,8 @@ VIEWS.sperf = function(){
       <div style="margin-top:12px"><button class="btn pri" onclick="saveSperf()">保存</button></div>
       <div class="hint">・ここの入力は<strong>分析と歩合計算のための集計</strong>で、店の売上に二重に足されることはありません(売上そのものは収支管理・1日まとめ入力・過去実績で記録してください)。<br>
       ・売上を入力したスタッフは、<strong>給料管理の歩合とスタッフ別売上グラフがこの数字で計算されます</strong>(未入力のスタッフはレジ・収支の担当付き記録から自動集計)。<br>
-      ・全部空にして保存すると、そのスタッフは自動集計に戻ります。</div>
+      ・全部空にして保存すると、そのスタッフは自動集計に戻ります。<br>
+      ・<strong>サロンボードをお使いなら、「スタイリスト別」集計のCSVをダウンロードして「サロンボードCSVを取り込む」を押すだけ</strong>で、この表が自動で埋まります(手入力不要)。</div>
     </div>` : `<div class="card"><div class="empty">先にスタッフを登録してください。<br><br><button class="btn pri" onclick="go('staff')">スタッフ登録へ</button></div></div>`) +
     analCard +
     (trendRows ? `<div class="card"><h2>スタッフ別売上の推移 <span class="h2-sub">直近6ヶ月</span></h2>
