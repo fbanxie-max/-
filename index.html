@@ -187,6 +187,28 @@ td.today-col{background:var(--accent-soft)}
 .visit-item .v-body{font-size:13px;color:var(--ink2)}
 .alertline{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--line)}
 .alertline:last-child{border-bottom:0}
+
+/* ---- organization chart ---- */
+.orgtree{display:flex;flex-direction:column;gap:14px}
+.org-level{display:flex;gap:12px;flex-wrap:wrap;align-items:stretch}
+.org-level.child{padding-left:22px;border-left:2px solid var(--line2)}
+.org-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;min-width:220px;max-width:320px;flex:1}
+.org-card.owner{border-color:var(--accent);background:var(--accent-soft)}
+.org-card.ceo{border-color:var(--info);background:var(--info-chip)}
+.org-card .org-title{font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.04em}
+.org-card .org-name{font-size:18px;font-weight:700;margin-top:2px}
+.org-card .org-memo{font-size:12.5px;color:var(--ink2);margin-top:8px}
+.dir-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.dir-item{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--surface2)}
+.dir-item .dir-name{font-weight:700}
+.dir-item .dir-role{font-size:12px;color:var(--muted);margin-top:2px}
+.note-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.note-card{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px;box-shadow:var(--shadow)}
+.note-card .note-title{font-weight:700;font-size:14px;margin-bottom:4px}
+.note-card .note-meta{font-size:11.5px;color:var(--muted);margin-bottom:8px}
+.note-card .note-body{font-size:13px;color:var(--ink2);white-space:pre-wrap}
+.note-card .note-actions{display:flex;gap:6px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap}
+.note-empty{border:1px dashed var(--line2);border-radius:12px;padding:18px;color:var(--muted);text-align:center;background:var(--surface2)}
 /* ---- mobile ---- */
 @media (max-width:760px){
   #app{flex-direction:column}
@@ -230,7 +252,29 @@ const DEFAULTS = {
   orders: [],     // {id,date,supplier,item,qty,unit,amount,memo,status,invId,deliveredDate,booked}
   inv: [],        // {id,name,category,qty,unit,minQty,price}
   customers: [],  // {id,name,kana,phone,birthday,memo,visits:[{id,date,menu,staffId,price,note}]}
-  appts: []       // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo}
+  appts: [],      // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo}
+  org: {          // 会社組織図・部門ディレクトリ
+    version: 2,
+    nodes: [
+      {id:"owner-asuka", parentId:"", name:"あすか", title:"オーナー", type:"owner", memo:"会社の最終意思決定者。方針・価値観・守るものを決める。"},
+      {id:"ceo-jobs", parentId:"owner-asuka", name:"ジョブズ", title:"CEO", type:"ceo", memo:"あすかと直接やりとりする経営責任者。必要なことを3つの箱に整理して進める。"},
+      {id:"dept-salon", parentId:"ceo-jobs", name:"店舗運営部", title:"現場・スタッフ・既存客", type:"department", memo:"予約、施術品質、働き方、従業員ファースト、既存客を守る動きをまとめる。"},
+      {id:"dept-marketing", parentId:"ceo-jobs", name:"集客発信部", title:"Hot Pepper・Threads・note", type:"department", memo:"髪質改善の打ち出し、ホットペッパービューティー、Threads、noteの発信をまとめる。"},
+      {id:"dept-management", parentId:"ceo-jobs", name:"管理仕組み化部", title:"数字・AI・仕組み", type:"department", memo:"売上、客単価、経費、AI活用、1人で抱えない仕組みづくりをまとめる。"}
+    ]
+  },
+  companyNotes: { // {rules,successes,failures}: [{id,date,title,body,tags}]
+    rules: [
+      {id:"rule-no-overwork", date:"", title:"気合いだけで全部を1人で抱えない", body:"時間が足りなくなる前提で、AI・仕組み・役割分担に逃がす。", tags:"働き方,仕組み化"},
+      {id:"rule-keep-existing", date:"", title:"既存客を失わない変え方をする", body:"父の代からの信頼を守りながら、変えるところと残すところを分ける。", tags:"事業承継,既存客"}
+    ],
+    successes: [
+      {id:"success-haircare", date:"", title:"髪質改善を軸に打ち出した", body:"ホットペッパービューティーで専門用語を減らし、悩みに伝わる言葉に変えた。新規増と単価アップにつながった。", tags:"髪質改善,Hot Pepper"}
+    ],
+    failures: [
+      {id:"failure-time", date:"", title:"全部を1人でやって時間が足りなかった", body:"集客、メニュー改善、スタッフ、既存客対応、売上管理を抱えすぎた。2期目は仕組み化が必要。", tags:"時間不足,改善"}
+    ]
+  }
 };
 let S = loadState();
 function loadState(){
@@ -238,7 +282,11 @@ function loadState(){
     const raw = localStorage.getItem(LS_KEY);
     if(!raw) return structuredClone(DEFAULTS);
     const d = JSON.parse(raw);
-    return Object.assign(structuredClone(DEFAULTS), d);
+    const state = Object.assign(structuredClone(DEFAULTS), d);
+    if(!state.org || state.org.version !== DEFAULTS.org.version) state.org = structuredClone(DEFAULTS.org);
+    if(!state.companyNotes) state.companyNotes = structuredClone(DEFAULTS.companyNotes);
+    for(const k of ["rules", "successes", "failures"]){ if(!Array.isArray(state.companyNotes[k])) state.companyNotes[k] = []; }
+    return state;
   }catch(e){ return structuredClone(DEFAULTS); }
 }
 function save(){
@@ -390,6 +438,9 @@ const NAV = [
   {id:"appts", label:"予約管理"},
   {id:"money", label:"収支管理"},
   {id:"receipts", label:"領収書管理"},
+  {sec:"組織"},
+  {id:"org", label:"会社組織図"},
+  {id:"companyNotes", label:"経営ナレッジ"},
   {sec:"スタッフ"},
   {id:"shifts", label:"シフト管理"},
   {id:"payroll", label:"給料管理"},
@@ -424,6 +475,79 @@ function monthNav(month, fnName){
   return `<span class="mnav"><button class="btn sm" onclick="${fnName}(-1)" aria-label="前月">‹</button><span class="mn-label">${fmtMonth(month)}</span><button class="btn sm" onclick="${fnName}(1)" aria-label="翌月">›</button></span>`;
 }
 const VIEWS = {};
+
+/* ================= organization ================= */
+function orgChildren(parentId){ return (S.org && S.org.nodes ? S.org.nodes : []).filter(n => (n.parentId || "") === parentId); }
+function orgCard(n){
+  return `<div class="org-card ${esc(n.type || "")}"><div class="org-title">${esc(n.title || "")}</div><div class="org-name">${esc(n.name || "")}</div>${n.memo ? `<div class="org-memo">${esc(n.memo)}</div>` : ""}</div>`;
+}
+VIEWS.org = function(){
+  const roots = orgChildren("");
+  const owner = roots[0];
+  const ceos = owner ? orgChildren(owner.id) : [];
+  const ceo = ceos[0];
+  const depts = ceo ? orgChildren(ceo.id) : [];
+  $("main").innerHTML =
+    pageHead("会社組織図", "あすかをオーナー、ジョブズをCEOに置いた最小限の基本ディレクトリ") +
+    `<div class="card"><h2>基本ルール</h2>
+      <div class="alertline"><span class="chip info">意思決定</span>あすか = オーナー。会社の最終方針を決める。</div>
+      <div class="alertline"><span class="chip good">窓口</span>あすかと直接やりとりするのはCEOのジョブズ。</div>
+      <div class="alertline"><span class="chip mut">運用</span>部門はジョブズの下に3つだけ置き、現場・集客発信・管理仕組み化に絞る。</div>
+    </div>
+    <div class="card"><h2>組織図</h2>
+      <div class="orgtree">
+        ${owner ? `<div class="org-level">${orgCard(owner)}</div>` : ""}
+        ${ceo ? `<div class="org-level child">${orgCard(ceo)}</div>` : ""}
+        ${depts.length ? `<div class="org-level child">${depts.map(orgCard).join("")}</div>` : ""}
+      </div>
+    </div>
+    <div class="card"><h2>部門ディレクトリ <span class="h2-sub">CEO配下</span></h2>
+      <div class="dir-list">
+        ${depts.map(d => `<div class="dir-item"><div class="dir-name">${esc(d.name)}</div><div class="dir-role">${esc(d.title)}</div><div class="org-memo">${esc(d.memo || "")}</div></div>`).join("")}
+      </div>
+    </div>`;
+};
+
+/* ================= company notes ================= */
+const NOTE_GROUPS = [
+  ["rules", "やってはいけないルール", "crit", "同じ失敗を繰り返さないための禁止・注意ルール"],
+  ["successes", "成功事例", "good", "うまくいった打ち手と再現したいポイント"],
+  ["failures", "失敗事例", "warn", "時間不足・伝わらなかったこと・次に直すこと"]
+];
+function noteList(key){ return (S.companyNotes && Array.isArray(S.companyNotes[key])) ? S.companyNotes[key] : []; }
+function noteFields(){ return [
+  {key:"date", label:"日付", type:"date", half:true},
+  {key:"tags", label:"タグ", placeholder:"例: 髪質改善,仕組み化", half:true},
+  {key:"title", label:"タイトル", required:true},
+  {key:"body", label:"内容", type:"textarea", required:true}
+]; }
+function noteCard(key, n){
+  return `<div class="note-card"><div class="note-title">${esc(n.title)}</div><div class="note-meta">${n.date ? fmtDate(n.date) + " ・ " : ""}${esc(n.tags || "")}</div><div class="note-body">${esc(n.body || "")}</div><div class="note-actions"><button class="btn sm" onclick="editCompanyNote('${key}','${n.id}')">編集</button><button class="btn sm danger" onclick="deleteCompanyNote('${key}','${n.id}')">削除</button></div></div>`;
+}
+VIEWS.companyNotes = function(){
+  $("main").innerHTML = pageHead("経営ナレッジ", "やってはいけないルール・成功事例・失敗事例を補完して残す") +
+    NOTE_GROUPS.map(([key, label, chip, sub]) => {
+      const list = noteList(key);
+      return `<div class="card"><h2>${esc(label)} <span class="chip ${chip}">${list.length}件</span> <span class="h2-sub">${esc(sub)}</span></h2>
+        <div style="margin-bottom:12px"><button class="btn pri sm" onclick="addCompanyNote('${key}')">+ ${esc(label)}を追加</button></div>
+        ${list.length ? `<div class="note-grid">${list.map(n => noteCard(key, n)).join("")}</div>` : `<div class="note-empty">まだ記録がありません。小さな気づきから残しましょう。</div>`}
+      </div>`;
+    }).join("");
+};
+window.addCompanyNote = function(key){
+  openForm({ title:"経営ナレッジを追加", fields: noteFields(), data:{date:todayStr()}, onsave:v => {
+    if(!S.companyNotes) S.companyNotes = structuredClone(DEFAULTS.companyNotes);
+    if(!Array.isArray(S.companyNotes[key])) S.companyNotes[key] = [];
+    S.companyNotes[key].unshift({id:uid(), ...v}); save(); toast("記録しました"); render();
+  }});
+};
+window.editCompanyNote = function(key, id){
+  const n = noteList(key).find(x => x.id === id); if(!n) return;
+  openForm({ title:"経営ナレッジを編集", fields: noteFields(), data:n, onsave:v => { Object.assign(n, v); save(); toast("更新しました"); render(); } });
+};
+window.deleteCompanyNote = function(key, id){
+  ask("この経営ナレッジを削除しますか?", () => { S.companyNotes[key] = noteList(key).filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
 /* ================= dashboard ================= */
 VIEWS.dash = function(){
   const m = thisMonth(), tday = todayStr();
