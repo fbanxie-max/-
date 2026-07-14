@@ -187,6 +187,10 @@ td.today-col{background:var(--accent-soft)}
 .visit-item .v-body{font-size:13px;color:var(--ink2)}
 .alertline{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--line)}
 .alertline:last-child{border-bottom:0}
+.note-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.note-head .note-title{font-size:14.5px;font-weight:700}
+.note-head .note-date{color:var(--muted);font-size:12px;margin-left:auto;white-space:nowrap}
+.note-body{font-size:13.5px;color:var(--ink2);line-height:1.7}
 /* ---- mobile ---- */
 @media (max-width:760px){
   #app{flex-direction:column}
@@ -230,7 +234,8 @@ const DEFAULTS = {
   orders: [],     // {id,date,supplier,item,qty,unit,amount,memo,status,invId,deliveredDate,booked}
   inv: [],        // {id,name,category,qty,unit,minQty,price}
   customers: [],  // {id,name,kana,phone,birthday,memo,visits:[{id,date,menu,staffId,price,note}]}
-  appts: []       // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo}
+  appts: [],      // {id,date,time,name,customerId,menu,staffId,price,status:'open'|'done'|'cancel',memo}
+  notes: []       // {id,type:'rule'|'success'|'fail'|'memo',date,title,body,pinned}
 };
 let S = loadState();
 function loadState(){
@@ -399,6 +404,8 @@ const NAV = [
   {id:"inv", label:"在庫管理"},
   {sec:"顧客"},
   {id:"customers", label:"顧客カルテ"},
+  {sec:"ナレッジ"},
+  {id:"notes", label:"ルール・事例集"},
   {sec:"その他"},
   {id:"settings", label:"設定・バックアップ"}
 ];
@@ -407,6 +414,7 @@ const V = {}; // view state
 V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.orderFilter = "all"; V.custSel = null; V.custQ = "";
+V.noteFilter = "all"; V.noteQ = "";
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
 function render(){
   $("sidebar").innerHTML =
@@ -437,6 +445,7 @@ VIEWS.dash = function(){
   const pendingOrders = S.orders.filter(o => o.status !== "done");
   const apptsToday = S.appts.filter(a => a.date === tday && a.status === "open").sort((a,b) => a.time.localeCompare(b.time));
   const shiftsToday = S.shifts.filter(s => s.date === tday);
+  const pinnedNotes = S.notes.filter(n => n.pinned);
   const alerts = [];
   low.forEach(i => alerts.push(`<div class="alertline"><span class="chip crit">在庫不足</span>${esc(i.name)}(残り ${i.qty}${esc(i.unit || "")} / 最低 ${i.minQty})</div>`));
   pendingOrders.filter(o => o.status === "draft").forEach(o => alerts.push(`<div class="alertline"><span class="chip warn">未発注</span>${esc(o.item)}(${esc(o.supplier)})</div>`));
@@ -469,6 +478,10 @@ VIEWS.dash = function(){
       <div class="card"><h2>アラート</h2>
         ${alerts.length ? alerts.join("") : `<div class="empty">対応が必要な項目はありません</div>`}
       </div>
+      ${pinnedNotes.length ? `<div class="card"><h2>ピン留めのルール・事例</h2>
+        ${pinnedNotes.map(n => `<div class="alertline"><span class="chip ${(NOTE_TYPES[n.type] || NOTE_TYPES.memo)[1]}">${(NOTE_TYPES[n.type] || NOTE_TYPES.memo)[0]}</span>${esc(n.title)}</div>`).join("")}
+        <div style="margin-top:10px"><button class="btn sm" onclick="go('notes')">ルール・事例集へ ›</button></div>
+      </div>` : ""}
     </div>`;
   attachChartTips();
 };
@@ -1139,6 +1152,73 @@ window.checkinAppt = function(id){
       save(); toast("会計を記録し、カルテに反映しました"); render();
     } });
 };
+/* ================= notes (社内ルール・事例集) ================= */
+window.setNoteFilter = f => { V.noteFilter = f; render(); };
+window.noteSearch = q => { V.noteQ = q; renderNoteList(); };
+const NOTE_TYPES = { rule:["社内ルール","info"], success:["成功事例","good"], fail:["失敗事例","crit"], memo:["気づき・メモ","mut"] };
+VIEWS.notes = function(){
+  const counts = {};
+  S.notes.forEach(n => { counts[n.type] = (counts[n.type] || 0) + 1; });
+  const tabs = [["all", `すべて(${S.notes.length})`], ...Object.entries(NOTE_TYPES).map(([k, [lbl]]) => [k, `${lbl}(${counts[k] || 0})`])]
+    .map(([k,l]) => `<button class="btn sm${V.noteFilter === k ? " pri" : ""}" onclick="setNoteFilter('${k}')">${l}</button>`).join("");
+  $("main").innerHTML =
+    pageHead("ルール・事例集", "社内ルールや成功・失敗の事例を蓄積して、お店のノウハウとして共有します",
+      `<button class="btn pri" onclick="addNote()">+ 記事を追加</button><button class="btn" onclick="exportNotesCsv()">CSV出力</button>`) +
+    `<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${tabs}
+      <input class="searchbar" type="search" placeholder="タイトル・本文で検索" value="${esc(V.noteQ)}" oninput="noteSearch(this.value)" style="margin-left:auto">
+    </div>
+    <div id="notelist"></div>`;
+  renderNoteList();
+};
+function renderNoteList(){
+  const elx = $("notelist"); if(!elx) return;
+  const q = V.noteQ.trim().toLowerCase();
+  const list = S.notes
+    .filter(n => V.noteFilter === "all" || n.type === V.noteFilter)
+    .filter(n => !q || [n.title, n.body].some(v => (v || "").toLowerCase().includes(q)))
+    .sort((a,b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (b.date || "").localeCompare(a.date || ""));
+  elx.innerHTML = list.length ? list.map(n => {
+    const [lbl, cls] = NOTE_TYPES[n.type] || NOTE_TYPES.memo;
+    return `<div class="card">
+      <div class="note-head">
+        <span class="chip ${cls}">${lbl}</span>${n.pinned ? '<span class="chip warn">ピン留め</span>' : ""}
+        <span class="note-title">${esc(n.title)}</span>
+        <span class="note-date">${fmtDate(n.date)}</span>
+      </div>
+      <div class="note-body">${esc(n.body).replace(/\n/g,"<br>")}</div>
+      <div style="margin-top:10px"><button class="btn sm ghost" onclick="editNote('${n.id}')">編集</button><button class="btn sm ghost" onclick="delNote('${n.id}')">削除</button></div>
+    </div>`; }).join("")
+  : `<div class="card"><div class="empty">${q || V.noteFilter !== "all" ? "該当する記事がありません" : "まだ記事がありません。接客・電話対応・施術のルールや、うまくいった施策・失敗から得た教訓を「+ 記事を追加」から記録していきましょう。"}</div></div>`;
+}
+function noteFields(){
+  return [
+    {key:"type", label:"種類", type:"select", options: Object.entries(NOTE_TYPES).map(([k, [lbl]]) => [k, lbl]), half:true},
+    {key:"date", label:"日付", type:"date", value: todayStr(), required:true, half:true},
+    {key:"title", label:"タイトル", type:"text", required:true, placeholder:"例: 電話予約の受け方 / 店販のおすすめ方法"},
+    {key:"body", label:"内容", type:"textarea", placeholder:"背景・やったこと・結果・学んだこと・今後のルールなどを自由に記録"},
+    {key:"pinned", label:"ピン留め", type:"select", options:[["","しない"],["1","する(一覧の上部に固定)"]]}
+  ];
+}
+window.addNote = function(type){
+  const fs = noteFields();
+  if(type) fs[0].value = type;
+  openForm({ title:"記事を追加", fields: fs,
+    onsave: v => { S.notes.push({id: uid(), ...v, pinned: !!v.pinned}); save(); toast("追加しました"); render(); } });
+};
+window.editNote = function(id){
+  const n = S.notes.find(x => x.id === id); if(!n) return;
+  openForm({ title:"記事を編集", fields: noteFields(), data: {...n, pinned: n.pinned ? "1" : ""},
+    onsave: v => { Object.assign(n, v, {pinned: !!v.pinned}); save(); toast("更新しました"); render(); } });
+};
+window.delNote = function(id){
+  ask("この記事を削除しますか?", () => { S.notes = S.notes.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+};
+window.exportNotesCsv = function(){
+  const rows = [["日付","種類","タイトル","内容","ピン留め"]];
+  [...S.notes].sort((a,b) => (a.date || "").localeCompare(b.date || ""))
+    .forEach(n => rows.push([n.date, (NOTE_TYPES[n.type] || NOTE_TYPES.memo)[0], n.title, n.body, n.pinned ? "あり" : ""]));
+  dlCSV(`ルール事例集_${todayStr()}.csv`, rows);
+};
 /* ================= settings ================= */
 VIEWS.settings = function(){
   let bytes = 0;
@@ -1216,6 +1296,10 @@ window.seedSample = function(){
     {id: uid(), date: t, time:"14:00", name:"山本 花子", customerId: c1, menu:"カット", staffId: s1, price:4950, status:"open", memo:"リタッチ相談"},
     {id: uid(), date: t, time:"16:30", name:"新規 太郎", menu:"カット", staffId: s2, price:3800, status:"open", memo:""});
   S.orders.push({id: uid(), date: t, supplier:"ビューティーディーラーA", item:"カラー剤 アッシュ8", qty:6, unit:"本", amount:4800, memo:"", status:"draft", invId: i1});
+  S.notes.push(
+    {id: uid(), type:"rule", date: t, title:"電話予約の受け方", body:"1. 店名と自分の名前を名乗る\n2. ご希望メニュー・日時・お名前・連絡先を伺う\n3. 内容を復唱してから予約管理に登録する", pinned:true},
+    {id: uid(), type:"success", date: pm + "-10", title:"店販シャンプーのおすすめ方法", body:"施術中に髪の悩みを伺ってから、仕上げで実際に使って説明すると購入につながりやすかった。押し売りにならないよう「合わなければ大丈夫です」と一言添えるのがコツ。", pinned:false},
+    {id: uid(), type:"fail", date: pm + "-22", title:"カラー剤の在庫切れで施術延期", body:"人気色の在庫確認を怠り、当日に在庫切れが発覚。お客様に日程変更をお願いすることになった。\n→ 在庫管理で最低在庫を設定し、アラートが出たら当日中に発注するルールに変更。", pinned:false});
   save(); toast("サンプルデータを投入しました"); render();
 };
 /* ================= boot ================= */
