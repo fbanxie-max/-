@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#f7f6f3" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
-<title>サロン経営管理</title>
+<title>きりもり(お試し版)</title>
 <style>
 :root{
   --bg:#f7f6f3; --surface:#fcfcfb; --surface2:#f2f1ec;
@@ -281,7 +281,7 @@ td.today-col{background:var(--accent-soft)}
 <script>
 "use strict";
 /* ================= state ================= */
-const LS_KEY = "salon-mgr-v1";
+const LS_KEY = "salon-mgr-demo-v1";
 /* 保存できない環境の警告。claude.aiのArtifactなどサンドボックス・埋め込み表示では
    localStorageが使えない/起動ごとに消えるため、入力前に気づけるようバナーを常時表示する */
 (function(){
@@ -320,7 +320,7 @@ let S = structuredClone(DEFAULTS); // 末尾のboot()で読み込み後に置き
    主: IndexedDB(数百MB規模。写真を多く保存できる)
    従: localStorage(約5MB。IndexedDBが使えない環境のフォールバック)
    旧バージョンのlocalStorageデータは初回起動時にIndexedDBへ自動移行する(元データは万一に備えて残す) */
-const IDB_NAME = "salon-mgr", IDB_STORE = "state";
+const IDB_NAME = "salon-mgr-demo", IDB_STORE = "state";
 let _idb = null, _lsMode = false, _idbWriting = false, _idbDirty = false;
 function idbOpen(){
   return new Promise((res, rej) => {
@@ -3637,6 +3637,8 @@ window.seedSample = function(){
 /* ================= boot ================= */
 (async () => {
   S = await loadState();
+  /* お試し版: 初回(データが空)のときだけサンプルデータを自動投入 */
+  if(!S.tx.length && !S.staff.length && !S.customers.length && !S.__seeded){ S.__seeded = true; try{ seedSample(); }catch(e){} }
   /* ブラウザに保存領域の恒久化を依頼(容量逼迫時の自動削除対象になりにくくする) */
   try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); }catch(e){}
   const _recN = applyRecurring();
