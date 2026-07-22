@@ -1,0 +1,27 @@
+name: Threads Auto Post
+on:
+  schedule:
+    - cron: "0 10 * * *"   # 毎日 19:00 JST（夜が伸びやすいため）
+  workflow_dispatch: {}     # 手動実行（テスト用）
+permissions:
+  contents: write
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Post due items
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+        run: python automation/threads_autopost.py
+      - name: Commit queue updates
+        run: |
+          git config user.name "threads-autopost"
+          git config user.email "actions@users.noreply.github.com"
+          git add automation/threads_queue.json
+          git commit -m "chore: update threads queue [skip ci]" || echo "no changes"
+          git push

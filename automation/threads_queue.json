@@ -1,0 +1,10 @@
+{
+  "max_per_run": 1,
+  "posts": [
+    {
+      "text": "（接続テスト）Threads自動投稿のテストです。うまく表示されたら成功。本番の投稿に差し替えます。",
+      "scheduled_at": null,
+      "posted": false
+    }
+  ]
+}
