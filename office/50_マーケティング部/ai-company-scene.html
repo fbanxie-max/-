@@ -1,197 +1,68 @@
 <title>深夜のAIカンパニー — 美容室オーナー×AI</title>
 <style>
   :root{
-    --void:#140f16; --void2:#0c0810;
-    --floor:#241a2b; --floor2:#1b1422; --wall:#1a1320; --line:#3d2f47;
-    --ivory:#f6efe9; --mute:#a897a6; --dim:#6b5b6d;
+    --void:#140f16; --void2:#0b0710; --line:#3d2f47;
+    --ivory:#f6efe9; --mute:#a897a6;
     --rose:#e6a6bd; --rose-deep:#c66f8f; --champ:#ecc79c; --mint:#8fe6c6; --coral:#f0967f;
-    --skin:#ecccb4; --hair:#2a2030;
-    --r:15px;
     --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"DejaVu Sans Mono",monospace;
     --jp:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Yu Gothic","Noto Sans JP",system-ui,sans-serif;
   }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0}
-  body{background:radial-gradient(120% 80% at 50% -8%,#2b1c30,var(--void) 55%,var(--void2));
+  body{background:radial-gradient(120% 80% at 50% -6%,#2b1c30,var(--void) 55%,var(--void2));
     color:var(--ivory);font-family:var(--jp);overflow:hidden;display:grid;place-items:center}
-  #bg{position:fixed;inset:0;width:100%;height:100%;z-index:0;opacity:.5}
-
-  .stage{position:relative;z-index:1;
+  .stage{position:relative;
     width:min(100vw, calc(100vh * 9 / 16));
     height:min(100vh, calc(100vw * 16 / 9));
     display:flex;flex-direction:column;overflow:hidden;
-    background:linear-gradient(180deg,var(--wall) 0 46%, #150f1c 46% 62%, var(--floor2) 62% 100%);
-    box-shadow:0 0 80px rgba(0,0,0,.6)}
+    background:linear-gradient(180deg,#150f1c 0 60%, #120c18 100%);box-shadow:0 0 90px rgba(0,0,0,.7)}
 
-  /* ---- HUD ---- */
-  .hud{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;
-    padding:14px 16px 10px;background:linear-gradient(180deg,rgba(12,8,16,.9),transparent)}
-  .title{min-width:0}
-  .title .t1{font-weight:800;font-size:15px;letter-spacing:.02em;line-height:1.15}
+  .hud{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;align-items:flex-start;justify-content:space-between;
+    gap:10px;padding:14px 16px 22px;background:linear-gradient(180deg,rgba(10,7,14,.92),rgba(10,7,14,.4) 60%,transparent)}
+  .title .t1{font-weight:800;font-size:15px;letter-spacing:.02em}
   .title .t2{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--mint);text-transform:uppercase;margin-top:3px}
   .hud-r{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
   .live{display:inline-flex;align-items:center;gap:5px;color:var(--mint);font-weight:800;font-size:10px;letter-spacing:.14em;font-family:var(--mono)}
   .live i{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 9px var(--mint);animation:blink 1.4s infinite}
   .kpis{display:flex;gap:7px}
-  .kpi{background:rgba(38,29,46,.7);border:1px solid var(--line);border-radius:9px;padding:3px 9px;text-align:right}
+  .kpi{background:rgba(38,29,46,.65);border:1px solid var(--line);border-radius:9px;padding:3px 9px;text-align:right;backdrop-filter:blur(4px)}
   .kpi .k{font-size:8px;color:var(--mute);letter-spacing:.08em;font-family:var(--mono);text-transform:uppercase}
-  .kpi .v{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.2}
+  .kpi .v{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}
   .v.mint{color:var(--mint)} .v.champ{color:var(--champ)}
 
-  /* ---- office ---- */
-  .office{position:relative;flex:1;min-height:0;padding:2px 12px 0}
-  .neon{position:absolute;top:6px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none}
-  .neon .n1{font-weight:800;font-size:13px;letter-spacing:.06em;color:var(--rose);
-    text-shadow:0 0 10px rgba(230,166,189,.7),0 0 22px rgba(198,111,143,.4)}
-  .neon .n2{font-family:var(--mono);font-size:8.5px;letter-spacing:.2em;color:var(--champ);opacity:.8;margin-top:2px}
+  .office{flex:1;min-height:0;position:relative}
+  #scene{position:absolute;inset:0;width:100%;height:100%}
 
-  .boss{position:absolute;top:34px;left:50%;transform:translateX(-50%);z-index:4}
-  .grid{position:absolute;left:12px;right:12px;bottom:30px;top:104px;
-    display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:6px;align-items:end;justify-items:center}
-  .station{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;width:100%;height:100%;padding-bottom:2px}
-  .wk{position:relative;display:flex;flex-direction:column;align-items:center}
-  .plate{margin-top:5px;font-size:9.5px;font-weight:800;letter-spacing:.03em;color:var(--ivory);
-    background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:20px;padding:2px 10px;white-space:nowrap}
-  .plate small{color:var(--mute);font-family:var(--mono);font-weight:400}
-
-  /* worker figure */
-  .worker{--c:var(--rose);position:relative;width:52px;height:50px;animation:idle 3.4s ease-in-out infinite}
-  .hair{position:absolute;left:13px;top:0;width:26px;height:14px;border-radius:13px 13px 3px 3px;background:var(--hair);z-index:2}
-  .head{position:absolute;left:15px;top:5px;width:22px;height:20px;border-radius:9px;background:var(--skin);z-index:1}
-  .body{position:absolute;left:9px;top:22px;width:34px;height:26px;border-radius:13px 13px 7px 7px;
-    background:linear-gradient(180deg,var(--c),color-mix(in srgb,var(--c) 70%,#000));z-index:1}
-  .arm{position:absolute;top:25px;width:8px;height:16px;border-radius:5px;background:var(--c);transform-origin:top center;z-index:3}
-  .arm.l{left:7px;animation:typeA .5s ease-in-out infinite}
-  .arm.r{right:7px;animation:typeB .5s ease-in-out infinite}
-  .worker.slow .arm{animation-duration:.9s}
-  .worker.cheer .arm.l{animation:cheerL 1s ease}
-  .worker.cheer .arm.r{animation:cheerR 1s ease}
-
-  .desk{position:relative;margin-top:-11px;width:76px;height:30px;z-index:2}
-  .slab{position:absolute;bottom:0;left:0;width:76px;height:13px;border-radius:5px;
-    background:linear-gradient(180deg,#2c2233,#1a1422);border:1px solid var(--line);box-shadow:0 4px 12px rgba(0,0,0,.4)}
-  .mon{position:absolute;bottom:11px;left:23px;width:32px;height:22px;border-radius:4px;background:#0d0912;
-    border:1px solid var(--line);overflow:hidden;box-shadow:0 0 0 2px rgba(0,0,0,.3)}
-  .mon .glow{position:absolute;inset:0;background:radial-gradient(circle at 50% 120%,var(--c),transparent 70%);opacity:.35;animation:flick 2.6s infinite}
-  .mon .barz{position:absolute;inset:4px;display:flex;align-items:flex-end;gap:2px}
-  .mon .barz i{flex:1;background:var(--c);border-radius:1px;opacity:.85}
-
-  .bubble{position:absolute;bottom:calc(100% + 5px);left:50%;transform:translateX(-50%) scale(.6);z-index:9;
-    background:var(--ivory);color:#241a2b;font-size:10px;font-weight:700;line-height:1.3;
-    padding:5px 9px;border-radius:11px;white-space:nowrap;opacity:0;pointer-events:none;
-    box-shadow:0 6px 16px rgba(0,0,0,.4);transition:transform .25s cubic-bezier(.3,1.6,.5,1),opacity .2s;max-width:150px}
-  .bubble::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);
-    border:5px solid transparent;border-top-color:var(--ivory)}
-  .bubble.show{opacity:1;transform:translateX(-50%) scale(1)}
-
-  /* boss slightly bigger, points */
-  .boss .worker{width:58px;height:56px}
-  .boss .arm.r{animation:point 2.2s ease-in-out infinite}
-  .boss .arm.l{animation:none;transform:rotate(6deg)}
-
-  /* runner carrying a doc along the floor */
-  .runner{position:absolute;bottom:7px;left:0;z-index:8;display:flex;align-items:flex-end;gap:1px;
-    animation:run 9s linear infinite;filter:drop-shadow(0 3px 7px rgba(0,0,0,.55))}
-  .runner .doc{font-size:16px;filter:drop-shadow(0 0 7px rgba(236,199,156,.9));align-self:center;margin-bottom:11px}
-  .runner .worker{width:40px;height:40px;animation:hop .5s ease-in-out infinite}
-  .runner .worker .arm{animation:swing .5s ease-in-out infinite;background:var(--champ)}
-  .runner .body{background:var(--champ)!important}
-  .runner .head{background:#f0d8c2} .runner .hair{background:#3a2a3c}
-
-  /* ---- phone / post ---- */
-  .phone{flex:0 0 auto;margin:0 12px 10px;background:linear-gradient(180deg,#221a29,#160f1d);
-    border:1px solid var(--line);border-radius:16px;padding:11px 13px;box-shadow:0 -6px 24px rgba(0,0,0,.4)}
+  .phone{flex:0 0 auto;margin:0 12px 10px;background:linear-gradient(180deg,rgba(34,26,41,.96),rgba(20,14,26,.96));
+    border:1px solid var(--line);border-radius:16px;padding:11px 13px;box-shadow:0 -8px 26px rgba(0,0,0,.5);backdrop-filter:blur(6px);z-index:4}
   .p-app{display:flex;align-items:center;gap:8px}
   .p-av{width:30px;height:30px;border-radius:50%;background:linear-gradient(145deg,var(--rose-deep),var(--champ));display:grid;place-items:center;font-size:14px}
   .p-name{font-weight:800;font-size:12px}.p-handle{font-size:10px;color:var(--mute);font-family:var(--mono)}
   .p-hook{font-weight:800;font-size:13.5px;margin:8px 0 5px;line-height:1.5;text-wrap:balance}
   .p-sub{font-size:11.5px;color:var(--mute);line-height:1.6}
   .p-sub .num{color:var(--champ);font-weight:800;font-family:var(--mono)} .cta{color:var(--rose);font-weight:800}
-  .p-foot{display:flex;gap:16px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line);
-    font-size:12px;font-family:var(--mono);color:var(--mute)}
+  .p-foot{display:flex;gap:16px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line);font-size:12px;font-family:var(--mono);color:var(--mute)}
   .p-foot b{color:var(--ivory)} .p-foot .h{color:var(--rose)}
 
-  /* ---- ticker ---- */
-  .ticker{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:7px 14px;background:rgba(10,7,14,.7);border-top:1px solid var(--line)}
+  .ticker{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:7px 14px;background:rgba(9,6,12,.8);border-top:1px solid var(--line);z-index:4}
   .t-lab{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;color:var(--mint);text-transform:uppercase;white-space:nowrap;display:flex;align-items:center;gap:5px}
   .t-lab i{width:5px;height:5px;border-radius:50%;background:var(--mint);box-shadow:0 0 7px var(--mint)}
   .t-log{flex:1;min-width:0;height:15px;position:relative;overflow:hidden}
   .t-log .ln{position:absolute;white-space:nowrap;font-family:var(--mono);font-size:10px;color:var(--mute)}
   .t-log .ln .ts{color:var(--champ)} .t-log .ln .ok{color:var(--mint)}
-
   @keyframes blink{50%{opacity:.25}}
-  @keyframes idle{50%{transform:translateY(-2px)}}
-  @keyframes typeA{50%{transform:rotate(20deg)}}
-  @keyframes typeB{0%,100%{transform:rotate(18deg)}50%{transform:rotate(2deg)}}
-  @keyframes cheerL{50%{transform:rotate(-150deg)}}
-  @keyframes cheerR{50%{transform:rotate(150deg)}}
-  @keyframes point{50%{transform:rotate(-38deg) translateX(2px)}}
-  @keyframes flick{50%{opacity:.6}}
-  @keyframes run{0%{left:-52px}88%,100%{left:100%}}
-  @keyframes hop{50%{transform:translateY(-3px)}}
-  @keyframes swing{50%{transform:rotate(30deg)}}
-  @media (prefers-reduced-motion:reduce){#bg{display:none} *{animation:none!important}}
 </style>
 
 <div class="stage">
-  <canvas id="bg"></canvas>
-
   <div class="hud">
-    <div class="title">
-      <div class="t1">深夜のAIカンパニー</div>
-      <div class="t2">現役 美容室オーナー &times; AI</div>
-    </div>
+    <div class="title"><div class="t1">深夜のAIカンパニー</div><div class="t2">現役 美容室オーナー &times; AI</div></div>
     <div class="hud-r">
       <span class="live"><i></i>LIVE <span id="clock">--:--:--</span></span>
-      <div class="kpis">
-        <div class="kpi"><div class="k">意思決定/秒</div><div class="v mint" id="k-dec">0</div></div>
-        <div class="kpi"><div class="k">投稿</div><div class="v champ" id="k-post">0</div></div>
-      </div>
+      <div class="kpis"><div class="kpi"><div class="k">意思決定/秒</div><div class="v mint" id="k-dec">0</div></div><div class="kpi"><div class="k">投稿</div><div class="v champ" id="k-post">0</div></div></div>
     </div>
   </div>
 
-  <div class="office">
-    <div class="neon"><div class="n1">24H OPERATION</div><div class="n2">SALON &times; AI ROOM</div></div>
-
-    <!-- boss -->
-    <div class="boss" id="boss">
-      <div class="bubble" id="b-boss">結論から報告してや</div>
-      <div class="worker slow" style="--c:var(--rose-deep)">
-        <div class="hair"></div><div class="head"></div><div class="body"></div>
-        <div class="arm l"></div><div class="arm r"></div>
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="station" data-dept="0">
-        <div class="wk"><div class="bubble">黒字着地や📈</div>
-          <div class="worker" style="--c:var(--champ)"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="arm l"></div><div class="arm r"></div></div></div>
-        <div class="desk"><div class="mon"><div class="glow"></div><div class="barz"><i style="height:40%"></i><i style="height:70%"></i><i style="height:55%"></i><i style="height:85%"></i></div></div><div class="slab"></div></div>
-        <div class="plate">💰 数字 <small>分析中</small></div>
-      </div>
-      <div class="station" data-dept="1">
-        <div class="wk"><div class="bubble">口コミ返信、送っとくで</div>
-          <div class="worker" style="--c:var(--rose)"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="arm l"></div><div class="arm r"></div></div></div>
-        <div class="desk"><div class="mon"><div class="glow"></div><div class="barz"><i style="height:60%"></i><i style="height:35%"></i><i style="height:80%"></i><i style="height:50%"></i></div></div><div class="slab"></div></div>
-        <div class="plate">🎯 集客 <small>実装中</small></div>
-      </div>
-      <div class="station" data-dept="2">
-        <div class="wk"><div class="bubble">このフック刺さる…！</div>
-          <div class="worker" style="--c:var(--mint)"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="arm l"></div><div class="arm r"></div></div></div>
-        <div class="desk"><div class="mon"><div class="glow"></div><div class="barz"><i style="height:75%"></i><i style="height:45%"></i><i style="height:65%"></i><i style="height:90%"></i></div></div><div class="slab"></div></div>
-        <div class="plate">✍️ 台本 <small>執筆中</small></div>
-      </div>
-      <div class="station" data-dept="3">
-        <div class="wk"><div class="bubble">顔ブレ検品OK🎬</div>
-          <div class="worker" style="--c:var(--coral)"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="arm l"></div><div class="arm r"></div></div></div>
-        <div class="desk"><div class="mon"><div class="glow"></div><div class="barz"><i style="height:50%"></i><i style="height:88%"></i><i style="height:40%"></i><i style="height:70%"></i></div></div><div class="slab"></div></div>
-        <div class="plate">🎨 制作 <small>生成中</small></div>
-      </div>
-    </div>
-
-    <!-- runner carrying draft to the phone -->
-    <div class="runner"><div class="worker"><div class="hair"></div><div class="head"></div><div class="body"></div><div class="arm l"></div><div class="arm r"></div></div><span class="doc">📄</span></div>
-  </div>
+  <div class="office"><canvas id="scene"></canvas></div>
 
   <div class="phone">
     <div class="p-app"><div class="p-av">✂️</div><div><div class="p-name">AI社長と美容室経営</div><div class="p-handle">@salon_ai_ceo</div></div></div>
@@ -205,78 +76,173 @@
 
 <script>
 (function(){
-  var RM=matchMedia('(prefers-reduced-motion: reduce)').matches, $=function(s){return document.querySelector(s)},$$=function(s){return[].slice.call(document.querySelectorAll(s))};
+  var RM=matchMedia('(prefers-reduced-motion: reduce)').matches, $=function(s){return document.querySelector(s)};
   function pad(n){return(n<10?'0':'')+n}
   function tick(){var d=new Date();$('#clock').textContent=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());}
   tick();setInterval(tick,1000);
-
-  var dec=1240,post=1;
+  var dec=1240,post=1;$('#k-dec').textContent=dec.toLocaleString();$('#k-post').textContent=post;
   if(!RM)setInterval(function(){dec+=Math.floor(Math.random()*6)+1;$('#k-dec').textContent=dec.toLocaleString();},1300);
-  $('#k-dec').textContent=dec.toLocaleString();$('#k-post').textContent=post;
 
-  // monitor bars wiggle
-  if(!RM)setInterval(function(){$$('.mon .barz i').forEach(function(b){b.style.height=(20+Math.random()*75)+'%';});},600);
+  /* ===== isometric canvas engine ===== */
+  var cv=$('#scene'),ctx=cv.getContext('2d'),W,H,DPR=Math.min(2,devicePixelRatio||1),S=1,OX,OY,TW,TH,ZH;
+  function shade(hex,f){var n=parseInt(hex.slice(1),16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+    r=Math.min(255,r*f)|0;g=Math.min(255,g*f)|0;b=Math.min(255,b*f)|0;return'rgb('+r+','+g+','+b+')';}
+  function iso(x,y,z){return[OX+(x-y)*TW, OY+(x+y)*TH - z*ZH];}
+  function poly(p,col,line){ctx.beginPath();ctx.moveTo(p[0][0],p[0][1]);for(var i=1;i<p.length;i++)ctx.lineTo(p[i][0],p[i][1]);ctx.closePath();
+    ctx.fillStyle=col;ctx.fill();if(line){ctx.strokeStyle=line;ctx.lineWidth=1;ctx.stroke();}}
+  // cuboid at tile (x,y), base z, size (w,d,h) in tile units
+  function box(x,y,z,w,d,h,hex){
+    var t=[iso(x,y,z+h),iso(x+w,y,z+h),iso(x+w,y+d,z+h),iso(x,y+d,z+h)];       // top
+    var L=[iso(x,y+d,z+h),iso(x+w,y+d,z+h),iso(x+w,y+d,z),iso(x,y+d,z)];        // front-left (y+d)
+    var R=[iso(x+w,y,z+h),iso(x+w,y+d,z+h),iso(x+w,y+d,z),iso(x+w,y,z)];        // front-right (x+w)
+    poly(R,shade(hex,.62));poly(L,shade(hex,.82));poly(t,shade(hex,1.18));
+  }
+  function shadow(x,y,w,d){var c=iso(x+w/2,y+d/2,0);ctx.save();ctx.translate(c[0],c[1]);ctx.scale(1,.5);
+    ctx.beginPath();ctx.arc(0,0,(w+d)*TW*.42,0,7);ctx.fillStyle='rgba(0,0,0,.34)';ctx.filter='blur(2px)';ctx.fill();ctx.restore();ctx.filter='none';}
 
-  // department speech bubbles
-  var chatter=[
-    ['7月、黒字着地や📈','分岐点まであと少し','コスト漏れ発見'],
-    ['口コミ返信つくった','周期LINE 配信中📩','失客18名を掘り起こし'],
-    ['このフック刺さる…！','3案から勝ち筋を選定','数字は正直に晒す'],
-    ['顔ブレ検品OK🎬','無音カット完了','テロップ焼き込み中']
+  function monitor(x,y,z,col,phase){ // small screen on desk facing camera (on x+w side)
+    var w=.5,h=.42; box(x,y,z,.06,w,h,'#241a2b');
+    var s=[iso(x,y,z+h+.02),iso(x,y+w,z+h+.02),iso(x,y+w,z+.06),iso(x,y+.0,z+.06)];
+    // screen glow
+    var g=iso(x,y+w/2,z+h/2);var rg=ctx.createRadialGradient(g[0],g[1],1,g[0],g[1],26*S);
+    rg.addColorStop(0,col);rg.addColorStop(1,'rgba(0,0,0,0)');ctx.globalAlpha=.5;ctx.fillStyle=rg;
+    ctx.beginPath();ctx.arc(g[0],g[1],26*S,0,7);ctx.fill();ctx.globalAlpha=1;
+    poly(s,'#0d0912');
+    // bars on screen
+    for(var i=0;i<4;i++){var bh=(.08+((Math.sin(phase+i*1.3)+1)/2)*.28);
+      var bx=iso(x,y+.08+i*.1,z+.06),bt=iso(x,y+.08+i*.1,z+.06+bh);
+      ctx.strokeStyle=col;ctx.lineWidth=3*S;ctx.beginPath();ctx.moveTo(bx[0],bx[1]);ctx.lineTo(bt[0],bt[1]);ctx.stroke();}
+  }
+
+  function person(x,y,z,col,t,typing){ // little iso figure
+    shadow(x-.16,y-.16,.42,.42);
+    var bob=typing?Math.sin(t*9)*.012:Math.sin(t*2)*.006;
+    box(x,y,z+bob,.34,.34,.4,col);                 // body
+    box(x+.03,y+.03,z+.4+bob,.28,.28,.16,'#e9c9b2'); // head (skin)
+    box(x+.02,y+.02,z+.52+bob,.30,.30,.07,'#2a2030'); // hair
+    // arms typing
+    var a=typing?(Math.sin(t*11)*.05):0;
+    box(x-.05,y+.06,z+.24+bob+a,.08,.2,.06,shade(col,.8));
+    box(x+.31,y+.06,z+.24+bob-a,.08,.2,.06,shade(col,.8));
+  }
+
+  // scene layout (tile coords)
+  var stations=[
+    {x:0.7,y:1.9,col:'#ecc79c',plate:'💰 数字',bub:['黒字着地や📈','コスト漏れ発見','分岐点まであと少し']},
+    {x:2.5,y:1.9,col:'#e6a6bd',plate:'🎯 集客',bub:['口コミ返信つくった','周期LINE 配信中📩','失客18名を掘り起こし']},
+    {x:0.7,y:4.3,col:'#8fe6c6',plate:'✍️ 台本',bub:['このフック刺さる…！','3案から勝ち筋','数字は正直に晒す']},
+    {x:2.5,y:4.3,col:'#f0967f',plate:'🎨 制作',bub:['顔ブレ検品OK🎬','無音カット完了','テロップ焼き込み中']}
   ];
-  var stations=$$('.station');
-  function popBubble(st,txt){var b=st.querySelector('.bubble');b.textContent=txt;b.classList.add('show');
-    setTimeout(function(){b.classList.remove('show');},2200);}
-  var ci=0;
-  function chat(){var st=stations[ci%stations.length],arr=chatter[ci%stations.length];
-    popBubble(st,arr[Math.floor(Math.random()*arr.length)]);
-    // occasional cheer
-    if(Math.random()<.3){var w=st.querySelector('.worker');w.classList.add('cheer');setTimeout(function(){w.classList.remove('cheer');},1000);}
-    ci++;}
-  if(!RM){chat();setInterval(chat,1500);}
-  // boss bubble rotate
-  var bossLines=['結論から報告してや','数字で見せて','安売りはせん','その値上げ、失客するで'];var bi=0;
-  if(!RM)setInterval(function(){bi++;var b=$('#b-boss');b.textContent=bossLines[bi%bossLines.length];b.classList.add('show');setTimeout(function(){b.classList.remove('show');},2400);},3000);
-  $('#b-boss').classList.add('show');
+  var boss={x:1.55,y:.25,col:'#c66f8f'};
+  var plants=[{x:-.05,y:.0},{x:3.35,y:.0},{x:-.05,y:6.0},{x:3.35,y:6.0}];
 
-  // post content (assembles when runner delivers)
-  var hooks=[
-    ['深夜2時、AI社長に「その値上げ、失客するで」と止められた話。','7月利益 +19万／口コミ +3／周期LINEで予約 +4。数字ぜんぶ晒します。'],
+  function drawFloor(){
+    // floor tiles
+    var NX=4,NY=7;
+    for(var gx=0;gx<NX;gx++)for(var gy=0;gy<NY;gy++){
+      var p=[iso(gx,gy,0),iso(gx+1,gy,0),iso(gx+1,gy+1,0),iso(gx,gy+1,0)];
+      poly(p, (gx+gy)%2? '#221829':'#1c1424', 'rgba(230,166,189,.05)');
+    }
+    // back walls
+    var wc='#181020';
+    // left wall (y=0 plane)
+    poly([iso(0,0,0),iso(NX,0,0),iso(NX,0,2.1),iso(0,0,2.1)], shade(wc,1.1));
+    // right wall (x=0 plane)
+    poly([iso(0,0,0),iso(0,NY,0),iso(0,NY,2.1),iso(0,0,2.1)], shade(wc,.7));
+    // neon sign on left wall
+    var a=iso(.5,0,1.15),b=iso(3.5,0,1.15);
+    ctx.save();ctx.translate((a[0]+b[0])/2,(a[1]+b[1])/2);
+    ctx.font='700 '+(13*S)+'px '+getComputedStyle(document.body).fontFamily;
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor='rgba(230,166,189,.9)';ctx.shadowBlur=16*S;ctx.fillStyle='#f2b9cc';
+    ctx.transform(1,.5,0,1,0,0); // skew to wall plane
+    ctx.fillText('SALON × AI  24H',0,0);ctx.restore();ctx.shadowBlur=0;
+  }
+  function plant(x,y){shadow(x,y,.36,.36);box(x+.06,y+.06,0,.24,.24,.22,'#3a2c42');
+    var c=iso(x+.18,y+.18,.22),rg=ctx.createRadialGradient(c[0],c[1]-6*S,1,c[0],c[1]-6*S,16*S);
+    rg.addColorStop(0,'#8fe0b0');rg.addColorStop(1,'#3f7a58');ctx.fillStyle=rg;
+    ctx.beginPath();ctx.ellipse(c[0],c[1]-10*S,11*S,15*S,0,0,7);ctx.fill();}
+
+  // speech bubbles state
+  var bubbles={};
+  function drawBubble(x,y,z,text){
+    var p=iso(x+.17,y+.17,z+.95),bx=p[0],by=p[1];
+    ctx.font='700 '+(11*S)+'px '+getComputedStyle(document.body).fontFamily;
+    var w=ctx.measureText(text).width+16*S,h=20*S;
+    ctx.fillStyle='#f6efe9';ctx.strokeStyle='rgba(0,0,0,.2)';
+    var rx=bx-w/2,ry=by-h,r=8*S;
+    ctx.beginPath();ctx.moveTo(rx+r,ry);ctx.arcTo(rx+w,ry,rx+w,ry+h,r);ctx.arcTo(rx+w,ry+h,rx,ry+h,r);
+    ctx.arcTo(rx,ry+h,rx,ry,r);ctx.arcTo(rx,ry,rx+w,ry,r);ctx.closePath();
+    ctx.shadowColor='rgba(0,0,0,.4)';ctx.shadowBlur=8*S;ctx.fill();ctx.shadowBlur=0;
+    ctx.beginPath();ctx.moveTo(bx-5*S,ry+h);ctx.lineTo(bx+5*S,ry+h);ctx.lineTo(bx,ry+h+6*S);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#241a2b';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,bx,ry+h/2);
+  }
+
+  // courier path (rectangle around room), returns {x,y}
+  function courierPos(t){
+    var loop=(t/9)%1; // 9s loop
+    var pts=[[1.0,5.6],[3.0,5.6],[3.0,2.7],[1.0,2.7]]; // path corners
+    var seg=loop*4,i=Math.floor(seg),f=seg-i,a=pts[i%4],b=pts[(i+1)%4];
+    return{x:a[0]+(b[0]-a[0])*f, y:a[1]+(b[1]-a[1])*f};
+  }
+
+  function frame(now){
+    var t=now/1000;
+    ctx.clearRect(0,0,W,H);
+    drawFloor();
+    // collect depth-sorted actors
+    var acts=[];
+    plants.forEach(function(p){acts.push({d:p.x+p.y,z:0,f:function(){plant(p.x,p.y);}});});
+    stations.forEach(function(st,i){acts.push({d:st.x+st.y,f:function(){
+      box(st.x-.1,st.y+.2,0,.75,.55,.32,'#2c2334'); // desk
+      monitor(st.x+.62,st.y+.28,.32,st.col,t*3+i); // monitor on desk (x+w side)
+      person(st.x,st.y-.05,0,st.col,t+i,true);
+    }});});
+    acts.push({d:boss.x+boss.y,f:function(){person(boss.x,boss.y,0,boss.col,t*.6,false);}});
+    var cp=courierPos(t);
+    acts.push({d:cp.x+cp.y,f:function(){person(cp.x,cp.y,0,'#ecc79c',t*3,false);
+      var dp=iso(cp.x+.5,cp.y,.55);ctx.font=(15*S)+'px sans-serif';ctx.textAlign='center';
+      ctx.shadowColor='rgba(236,199,156,.9)';ctx.shadowBlur=8*S;ctx.fillText('📄',dp[0],dp[1]);ctx.shadowBlur=0;}});
+    acts.sort(function(a,b){return a.d-b.d;});
+    acts.forEach(function(a){a.f();});
+    // bubbles on top
+    stations.forEach(function(st){var b=bubbles[st.plate];if(b&&t<b.until)drawBubble(st.x,st.y,0,b.text);});
+    var bb=bubbles.boss;if(bb&&t<bb.until)drawBubble(boss.x,boss.y+.1,0,bb.text);
+    if(!RM)requestAnimationFrame(frame);
+  }
+  function resize(){
+    var o=$('.office'),w=o.clientWidth,h=o.clientHeight;
+    cv.width=w*DPR;cv.height=h*DPR;cv.style.width=w+'px';cv.style.height=h+'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0);W=w;H=h;
+    S=Math.min(w/430,h/560); if(S<.6)S=.6; if(S>1.15)S=1.15;
+    TW=38*S;TH=21*S;ZH=34*S;OX=w*0.5+0.4*TW;OY=h*0.30;
+    if(RM){requestAnimationFrame(function(){frame(performance.now());});}
+  }
+  addEventListener('resize',resize);resize();
+  if(!RM)requestAnimationFrame(frame);
+
+  // bubble scheduler
+  var bi=0;function popB(){var t=performance.now()/1000;
+    var st=stations[bi%stations.length];bubbles[st.plate]={text:st.bub[Math.floor(Math.random()*st.bub.length)],until:t+2.4};bi++;}
+  if(!RM){popB();setInterval(popB,1500);}
+  var bl=['結論から報告してや','数字で見せて','安売りはせん','その値上げ失客するで'],bli=0;
+  function popBoss(){var t=performance.now()/1000;bubbles.boss={text:bl[bli%bl.length],until:t+2.6};bli++;}
+  if(!RM){popBoss();setInterval(popBoss,3000);}
+
+  /* post + engagement + ticker (DOM) */
+  var hooks=[['深夜2時、AI社長に「その値上げ、失客するで」と止められた話。','7月利益 +19万／口コミ +3／周期LINEで予約 +4。数字ぜんぶ晒します。'],
     ['「髪質改善、次いつ来たら？」を全部AIにまかせた結果。','失客予備軍18名にLINE→予約が戻ってきた。やり方も公開。'],
-    ['AIにHPB順位を追わせたら、全部“403”で門前払いされた。','で、結局どうしたか。人力×AIの落としどころを話します。']
-  ];
-  var hi=0;
-  function setPost(){var h=hooks[hi%hooks.length];$('#p-hook').textContent=h[0];
+    ['AIにHPB順位を追わせたら、全部“403”で門前払いされた。','で、結局どうしたか。人力×AIの落としどころを話します。']];
+  var hi=0;function setPost(){var h=hooks[hi%hooks.length];$('#p-hook').textContent=h[0];
     $('#p-sub').innerHTML='<span class="num">実データ</span>：'+h[1]+'<br><span class="cta">▶ 続きはプロフィールから</span>';}
   setPost();
-  function deliver(){hi++;post++;$('#k-post').textContent=post;setPost();
-    var av=$('.p-av');av.animate?av.animate([{transform:'scale(1)'},{transform:'scale(1.25)'},{transform:'scale(1)'}],{duration:500}):0;
-    lk+=Math.floor(Math.random()*40)+20;refreshEng();}
-  if(!RM)setInterval(deliver,9000); // synced with runner loop (9s)
-
-  // engagement
-  var lk=71,cm=3,rp=3;function refreshEng(){$('#likes').textContent=lk;$('#cmts').textContent=cm;$('#reps').textContent=rp;}
-  refreshEng();
-  if(!RM)setInterval(function(){lk+=Math.floor(Math.random()*5);if(Math.random()<.25)cm++;if(Math.random()<.18)rp++;refreshEng();},1600);
-
-  // ticker (single line fade)
+  var lk=71,cm=3,rp=3;function eng(){$('#likes').textContent=lk;$('#cmts').textContent=cm;$('#reps').textContent=rp;}eng();
+  if(!RM){setInterval(function(){lk+=Math.floor(Math.random()*5);if(Math.random()<.25)cm++;if(Math.random()<.18)rp++;eng();},1600);
+    setInterval(function(){hi++;post++;$('#k-post').textContent=post;setPost();lk+=Math.floor(Math.random()*40)+20;eng();},9000);}
   var logs=[['数字','資金繰りを再計算 → 黒字着地見込み','ok'],['集客','口コミ返信を3件生成（メニュー名入り）','ok'],['集客','失客予備軍18名を抽出 → 周期LINE配信','ok'],['台本','フックを3案比較 → 勝ち筋を採用',''],['制作','キャラ固定で画像4枚生成 → 顔ブレ検品',''],['制作','テロップ焼き込み → 無音区間を自動カット','ok'],['社長','「安売りはしない」で最終承認','']];
-  var log=$('#tlog'),ti=0;
-  function pushLog(){var d=new Date(),ts=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());var it=logs[ti%logs.length];ti++;
+  var log=$('#tlog'),ti=0;function pushLog(){var d=new Date(),ts=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());var it=logs[ti%logs.length];ti++;
     var ln=document.createElement('div');ln.className='ln';ln.innerHTML='<span class="ts">'+ts+'</span>　['+it[0]+'] '+it[1]+(it[2]?' <span class="ok">✓完了</span>':'');
     ln.style.opacity='0';ln.style.transition='opacity .4s';log.innerHTML='';log.appendChild(ln);requestAnimationFrame(function(){ln.style.opacity='1';});}
   pushLog();if(!RM)setInterval(pushLog,2400);
-
-  // ambient canvas
-  var cv=$('#bg'),ctx=cv.getContext('2d'),W,H,pts=[],DP=Math.min(2,devicePixelRatio||1);
-  function rs(){W=cv.width=innerWidth*DP;H=cv.height=innerHeight*DP;pts=[];var n=Math.min(48,Math.floor(innerWidth/20));
-    for(var i=0;i<n;i++)pts.push({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-.5)*.1*DP,vy:(Math.random()-.5)*.1*DP,r:(Math.random()*1.4+.4)*DP});}
-  rs();addEventListener('resize',rs);
-  function draw(){ctx.clearRect(0,0,W,H);for(var i=0;i<pts.length;i++){var p=pts[i];p.x+=p.vx;p.y+=p.vy;
-    if(p.x<0)p.x=W;if(p.x>W)p.x=0;if(p.y<0)p.y=H;if(p.y>H)p.y=0;
-    for(var j=i+1;j<pts.length;j++){var q=pts[j],dx=p.x-q.x,dy=p.y-q.y,d=dx*dx+dy*dy,m=(120*DP)*(120*DP);
-      if(d<m){ctx.strokeStyle='rgba(230,166,189,'+(.09*(1-d/m))+')';ctx.lineWidth=DP;ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();}}
-    ctx.fillStyle='rgba(236,199,156,.45)';ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();}requestAnimationFrame(draw);}
-  if(!RM)draw();
 })();
 </script>
