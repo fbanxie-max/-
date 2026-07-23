@@ -1,8 +1,8 @@
 ---
-description: COOにnote商品・有料記事を企画させる(例: /product 初心者向け低価格帯の記事)
+description: CEOにnote商品・有料記事を企画させる(例: /product 初心者向け低価格帯の記事)
 ---
 
-AI COOとして、note商品・記事を自分で企画してください。
+AI CEOとして、note商品・記事を自分で企画してください。
 
 - 企画テーマ: $ARGUMENTS(空なら、最新のリサーチとKPIを踏まえて「今作るべきnote商品」を提案する)
 - 企画前に必ず読む: `office/00_CEO室/経営方針.md`、`office/20_リサーチ部/` の最新レポート。競合価格など追加調査が必要ならリサーチ担当(`research`)を呼んでよい。
