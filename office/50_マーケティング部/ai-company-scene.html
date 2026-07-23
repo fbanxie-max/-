@@ -27,6 +27,17 @@
   .kpi .v{font-size:14px;font-weight:900;font-variant-numeric:tabular-nums}
   .v.mint{color:var(--mint)} .v.champ{color:#f59e0b}
 
+  .board{flex:0 0 auto;padding:66px 11px 2px;display:grid;grid-template-columns:1fr 1fr;gap:7px;z-index:3}
+  .tcard{background:#fff;border-radius:13px;padding:7px 10px 9px;box-shadow:0 5px 16px rgba(200,120,150,.22);border-left:4px solid var(--c);min-width:0}
+  .tc-h{display:flex;align-items:center;gap:5px;font-weight:900;font-size:11.5px;white-space:nowrap}
+  .tc-h .st{margin-left:auto;font-family:var(--mono);font-size:7.5px;color:#fff;background:var(--c);padding:1px 6px;border-radius:8px;letter-spacing:.04em;font-weight:800}
+  .tc-now{font-size:10.5px;color:var(--ink);margin-top:5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tc-now .lb,.tc-next .lb{font-family:var(--mono);font-size:8px;font-weight:800;margin-right:3px}
+  .tc-now .lb{color:var(--c)}
+  .bar{height:5px;border-radius:5px;background:#f2e7ee;overflow:hidden;margin-top:5px}
+  .bar>i{display:block;height:100%;background:var(--c);width:0%;border-radius:5px;transition:width .28s linear}
+  .tc-next{font-size:9.5px;color:var(--mute);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tc-next .lb{color:var(--mute)}
   .office{flex:1;min-height:0;position:relative}
   #scene{position:absolute;inset:0;width:100%;height:100%}
 
@@ -59,6 +70,13 @@
     </div>
   </div>
 
+  <div class="board">
+    <div class="tcard" style="--c:#f59e0b"><div class="tc-h">💰 数字<span class="st">稼働中</span></div><div class="tc-now"><span class="lb">今</span><span class="txt"></span></div><div class="bar"><i></i></div><div class="tc-next"><span class="lb">次</span><span class="nx"></span></div></div>
+    <div class="tcard" style="--c:#ff6f9c"><div class="tc-h">🎯 集客<span class="st">稼働中</span></div><div class="tc-now"><span class="lb">今</span><span class="txt"></span></div><div class="bar"><i></i></div><div class="tc-next"><span class="lb">次</span><span class="nx"></span></div></div>
+    <div class="tcard" style="--c:#22c9a0"><div class="tc-h">✍️ 台本<span class="st">稼働中</span></div><div class="tc-now"><span class="lb">今</span><span class="txt"></span></div><div class="bar"><i></i></div><div class="tc-next"><span class="lb">次</span><span class="nx"></span></div></div>
+    <div class="tcard" style="--c:#4bb4ff"><div class="tc-h">🎨 制作<span class="st">稼働中</span></div><div class="tc-now"><span class="lb">今</span><span class="txt"></span></div><div class="bar"><i></i></div><div class="tc-next"><span class="lb">次</span><span class="nx"></span></div></div>
+  </div>
+
   <div class="office"><canvas id="scene"></canvas></div>
 
   <div class="phone">
@@ -79,6 +97,29 @@
   tick();setInterval(tick,1000);
   var dec=1240,post=1;$('#k-dec').textContent=dec.toLocaleString();$('#k-post').textContent=post;
   if(!RM)setInterval(function(){dec+=Math.floor(Math.random()*6)+1;$('#k-dec').textContent=dec.toLocaleString();},1300);
+
+  // ===== 稼働ボード(今してる/次する) =====
+  (function board(){
+    var depts=[
+      {c:'#f59e0b',q:['資金繰りを再計算','値上げの利益を試算','無駄コストを検出','7月の締め・予測']},
+      {c:'#ff6f9c',q:['口コミ返信を作成','周期LINEの対象を抽出','HPB順位を点検','クーポン効果を測定']},
+      {c:'#22c9a0',q:['フックを3案比較','投稿の構成づくり','実数字を台本に反映','キャプションを作成']},
+      {c:'#4bb4ff',q:['キャラ画像を4枚生成','顔ブレを検品','テロップを焼き込み','無音区間をカット']}
+    ];
+    [].slice.call(document.querySelectorAll('.tcard')).forEach(function(card,i){
+      var d=depts[i],qi=Math.floor(Math.random()*d.q.length),p=Math.random()*35,
+        txt=card.querySelector('.txt'),nx=card.querySelector('.nx'),bar=card.querySelector('.bar>i'),st=card.querySelector('.st');
+      function render(){txt.textContent='▸ '+d.q[qi%d.q.length]+'中';nx.textContent='▸ '+d.q[(qi+1)%d.q.length];}
+      render();bar.style.width=p+'%';
+      if(RM)return;
+      setInterval(function(){
+        p+=2+Math.random()*4.5;
+        if(p>=100){p=0;qi++;render();st.textContent='✓完了';st.style.background='#17b890';
+          setTimeout(function(){st.textContent='稼働中';st.style.background=d.c;},900);}
+        bar.style.width=Math.min(100,p)+'%';
+      },260+i*40);
+    });
+  })();
 
   var cv=$('#scene'),ctx=cv.getContext('2d'),W,H,DPR=Math.min(2,devicePixelRatio||1),S=1,OX,OY,TW,TH,ZH;
   function shade(hex,f){var n=parseInt(hex.slice(1),16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
@@ -203,8 +244,8 @@
   }
   function resize(){var o=$('.office'),w=o.clientWidth,h=o.clientHeight;
     cv.width=w*DPR;cv.height=h*DPR;cv.style.width=w+'px';cv.style.height=h+'px';ctx.setTransform(DPR,0,0,DPR,0,0);W=w;H=h;
-    S=Math.min(w/430,h/560);if(S<.6)S=.6;if(S>1.2)S=1.2;
-    TW=39*S;TH=25*S;ZH=37*S;OX=w*0.5+0.6*TW;OY=h*0.40;initConf();
+    S=Math.min(w/430,h/500);if(S<.6)S=.6;if(S>1.2)S=1.2;
+    TW=39*S;TH=25*S;ZH=37*S;OX=w*0.5+0.6*TW;OY=h*0.36;initConf();
     if(RM)requestAnimationFrame(function(){frame(performance.now());});}
   addEventListener('resize',resize);resize();
   if(!RM)requestAnimationFrame(frame);
