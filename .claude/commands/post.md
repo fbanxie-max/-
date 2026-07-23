@@ -1,8 +1,8 @@
 ---
-description: CEOにThreads投稿を作らせる(例: /post 失敗談系を3本)
+description: COOにThreads投稿を作らせる(例: /post 失敗談系を3本)
 ---
 
-AI CEOとして、Threads投稿を自分で作成してください。
+AI COOとして、Threads投稿を自分で作成してください。
 
 - 依頼内容: $ARGUMENTS(空なら「コンテンツカレンダーの直近予定に沿った投稿を3案」)
 - 作成前に必ず読む: `office/30_分析部/失敗リスト.md`(**投稿前チェック5項目を必ず通す**)、`office/30_分析部/勝ちパターンメモ.md`、`office/00_CEO室/経営方針.md`(キャラ・NG)、`office/90_テンプレート/Threads投稿テンプレ.md`(型)、`office/20_リサーチ部/` の最新レポート。
