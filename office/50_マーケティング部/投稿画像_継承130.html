@@ -1,0 +1,87 @@
+<title>継承2年で130% 投稿画像</title>
+<style>
+  :root{
+    --bg:#faf5ee; --card:#ffffff; --ink:#271a20; --ink2:#6d5b63; --muted:#a6959c;
+    --berry:#d24f78; --berry-d:#b23a63; --teal:#159e86; --line:#efe4dc;
+    --jp:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Yu Gothic","Noto Sans JP",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{display:grid;place-items:center;background:#e9ddd3;font-family:var(--jp)}
+  .poster{width:1080px;height:1350px;background:
+      radial-gradient(120% 60% at 85% -5%,#ffe7ee 0%,transparent 45%),
+      radial-gradient(100% 50% at -10% 105%,#e4f6f0 0%,transparent 45%),
+      var(--bg);
+    color:var(--ink);padding:82px 84px;display:flex;flex-direction:column;position:relative;overflow:hidden}
+  .eyebrow{display:inline-flex;align-items:center;gap:12px;align-self:flex-start;
+    background:#fff;border:1px solid var(--line);border-radius:100px;padding:12px 22px;
+    font-weight:800;font-size:24px;letter-spacing:.02em;color:var(--berry-d);box-shadow:0 6px 20px rgba(190,120,150,.14)}
+  .eyebrow .dot{width:12px;height:12px;border-radius:50%;background:var(--berry);box-shadow:0 0 0 5px rgba(210,79,120,.15)}
+
+  .hero{margin-top:54px}
+  .hero .l1{font-size:66px;font-weight:800;letter-spacing:.01em;line-height:1.2}
+  .hero .big{display:flex;align-items:baseline;gap:10px;margin-top:6px}
+  .hero .big .num{font-size:250px;font-weight:900;line-height:.9;color:var(--berry);letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;text-shadow:0 10px 30px rgba(210,79,120,.22)}
+  .hero .big .pct{font-size:120px;font-weight:900;color:var(--berry);line-height:1}
+  .hero .sub{margin-top:26px;font-size:52px;font-weight:900;line-height:1.42;letter-spacing:.01em}
+  .hero .sub .hl{color:var(--teal)}
+  .hero .sub .strike{color:var(--muted);text-decoration:line-through;text-decoration-thickness:5px;text-decoration-color:var(--berry)}
+
+  .panel{margin-top:auto;background:var(--card);border:1px solid var(--line);border-radius:34px;
+    padding:44px 48px;box-shadow:0 24px 60px rgba(150,100,120,.14)}
+  .p-h{display:flex;align-items:baseline;justify-content:space-between}
+  .p-h .t{font-size:30px;font-weight:900}
+  .p-h .u{font-size:22px;color:var(--muted);font-weight:700}
+  .trend{margin-top:20px;position:relative;height:230px}
+  .trend svg{width:100%;height:100%;overflow:visible}
+  .trend .yr{fill:var(--muted);font-size:24px;font-weight:800;font-family:var(--mono)}
+  .trend .val{fill:var(--ink);font-size:34px;font-weight:900;font-family:var(--mono)}
+  .stat{display:flex;gap:16px;margin-top:34px}
+  .chip{flex:1;background:#fbf1f4;border:1px solid #f3dbe4;border-radius:22px;padding:22px 24px}
+  .chip.teal{background:#eafaf5;border-color:#cdeee4}
+  .chip .k{font-size:24px;color:var(--ink2);font-weight:800}
+  .chip .v{font-size:48px;font-weight:900;margin-top:4px;font-variant-numeric:tabular-nums}
+  .chip .v small{font-size:26px;font-weight:800;color:var(--muted)}
+  .chip.berry .v{color:var(--berry-d)} .chip.teal .v{color:var(--teal)}
+
+  .foot{margin-top:34px;display:flex;align-items:center;justify-content:space-between}
+  .foot .who{display:flex;align-items:center;gap:16px}
+  .foot .av{width:64px;height:64px;border-radius:50%;background:linear-gradient(140deg,var(--berry),#f0a85f);display:grid;place-items:center;font-size:30px}
+  .foot .h{font-size:26px;font-weight:900} .foot .hh{font-size:20px;color:var(--muted);font-family:var(--mono)}
+  .foot .cta{font-size:24px;font-weight:900;color:var(--berry-d)}
+</style>
+
+<div class="poster">
+  <div class="eyebrow"><span class="dot"></span>現役 美容室オーナー ・ 事業継承の記録</div>
+
+  <div class="hero">
+    <div class="l1">美容室を継いで2年。</div>
+    <div class="big"><span class="l1" style="font-size:72px">売上</span><span class="num">130</span><span class="pct">%</span></div>
+    <div class="sub"><span class="strike">「何でも屋」</span>をやめて、<br><span class="hl">専門店</span>に振り切った。</div>
+  </div>
+
+  <div class="panel">
+    <div class="p-h"><div class="t">客単価の推移</div><div class="u">2024 → 2026</div></div>
+    <div class="trend">
+      <svg viewBox="0 0 900 230" preserveAspectRatio="none">
+        <polyline points="90,175 450,120 810,60" fill="none" stroke="#d24f78" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="90" cy="175" r="12" fill="#d24f78"/><circle cx="450" cy="120" r="12" fill="#d24f78"/><circle cx="810" cy="60" r="14" fill="#d24f78"/>
+        <text class="val" x="90" y="150" text-anchor="middle">¥7,200</text>
+        <text class="val" x="450" y="95" text-anchor="middle">¥8,000</text>
+        <text class="val" x="810" y="36" text-anchor="middle">¥8,500</text>
+        <text class="yr" x="90" y="215" text-anchor="middle">2024</text>
+        <text class="yr" x="450" y="215" text-anchor="middle">2025</text>
+        <text class="yr" x="810" y="215" text-anchor="middle">2026</text>
+      </svg>
+    </div>
+    <div class="stat">
+      <div class="chip teal"><div class="k">新規客(HPBのみ)</div><div class="v">57<small>名/月</small></div></div>
+      <div class="chip berry"><div class="k">売上(前年比)</div><div class="v">130<small>%</small></div></div>
+    </div>
+    <div class="foot">
+      <div class="who"><div class="av">✂️</div><div><div class="h">AI社長と美容室経営</div><div class="hh">@salon_ai_ceo</div></div></div>
+      <div class="cta">続き → プロフィールのnote</div>
+    </div>
+  </div>
+</div>
