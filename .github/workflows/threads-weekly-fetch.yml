@@ -1,0 +1,41 @@
+name: Threads Weekly Fetch
+
+# 毎週月曜 10:00 JST（= 01:00 UTC）に Threads API からデータを取得し、
+# 結果をリポジトリに保存する。AI CEO はそのファイルを読んで分析する。
+# ※ scheduleは「デフォルトブランチ」に置かれている場合のみ動く。
+on:
+  schedule:
+    - cron: "0 1 * * 1"
+  workflow_dispatch: {}      # 手動実行（初回テスト用）
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch Threads insights & keyword search
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_LOOKBACK_DAYS: "14"
+        run: python automation/threads_weekly_fetch.py
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "office/30_分析部" "office/20_リサーチ部" || true
+          if git diff --staged --quiet; then
+            echo "変更なし（取得できたデータが前回と同じ）"
+          else
+            git commit -m "自動取得: Threads週次データ（$(date -u +%Y-%m-%d)）"
+            git push
+          fi
