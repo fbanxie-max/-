@@ -280,6 +280,9 @@ td.today-col{background:var(--accent-soft)}
 <div id="toast" role="status"></div>
 <script>
 "use strict";
+/* アプリのバージョン(更新のたびに日付を進める)。設定画面とサイドバーに表示され、
+   「更新が反映されているか」を端末で確認するための目印になる */
+const APP_VER = "2026.08.12-1";
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-demo-v1";
 /* 保存できない環境の警告。claude.aiのArtifactなどサンドボックス・埋め込み表示では
@@ -846,7 +849,7 @@ V.sperfMonth = thisMonth();
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
 function render(){
   $("sidebar").innerHTML =
-    `<div class="brand"><div class="b-name">${esc(S.settings.name)}</div><div class="b-sub">Salon Manager</div></div>` +
+    `<div class="brand"><div class="b-name">${esc(S.settings.name)}</div><div class="b-sub">Salon Manager v${APP_VER}</div></div>` +
     NAV.map(n => n.sec
       ? `<div class="nav-sec">${esc(n.sec)}</div>`
       : `<button class="navbtn${cur === n.id ? " on" : ""}" onclick="go('${n.id}')"><span class="nb-dot"></span>${esc(n.label)}</button>`
@@ -3698,7 +3701,7 @@ VIEWS.settings = function(){
   try{ bytes = JSON.stringify(S).length; }catch(e){}
   const kb = bytes >= 1048576 ? (bytes/1048576).toFixed(1) + "MB" : (bytes/1024).toFixed(0) + "KB";
   $("main").innerHTML =
-    pageHead("設定・バックアップ", "") +
+    pageHead("設定・バックアップ", `アプリのバージョン: v${APP_VER}(最新版が反映されているかの確認用。古い場合はページを再読み込みしてください)`) +
     `<div class="card"><h2>店舗設定</h2>
       <div class="f-row" style="max-width:320px"><label for="set-name">店名</label>
       <input id="set-name" value="${esc(S.settings.name)}"></div>
