@@ -1258,6 +1258,7 @@ VIEWS.reports = function(){
           </tr>`; }).join("")}</table>` : `<div class="empty">まだ記録がありません</div>`}</div>
       <div class="hint">行をタップするとその月の月次レポート(印刷・メール対応)が開きます。材料費率は売上に対する材料費の割合です。利益は「売上 − 経費 − その月分の従業員給料」で、基本給・歩合は毎月自動で反映されます(給料管理で内訳を確認できます)。事業主本人の給料は経費にせず利益に含めます。</div>
     </div>` +
+    yearCardHtml(m.slice(0, 4)) +
     yoyCardHtml(m.slice(0, 4)) +
     trendCardsHtml();
   attachChartTips();
@@ -1292,9 +1293,62 @@ window.exportDailyCsv = function(){
     x.closed ? "締め済" : "未締め", x.closed ? x.diff : "", x.memo]));
   dlCSV(`日報_${m}.csv`, rows);
 };
-/* 売上の前年対比カード(1〜12月の月別売上を前年と並べる) */
-function yoyCardHtml(yr){
+/* 年単位の集計。取引がある月だけを合算する(未来月・未使用月に月給が乗らないように) */
+function yearSummary(yr){
+  const r = { inc: 0, exp: 0, pay: 0, profit: 0, count: 0, mat: 0, retail: 0, activeMonths: 0 };
+  for(let i = 1; i <= 12; i++){
+    const mm = `${yr}-${String(i).padStart(2, "0")}`;
+    if(mm > thisMonth() || !txInMonth(mm).length) continue;
+    const s = monthSummary(mm);
+    r.inc += s.inc; r.exp += s.exp; r.pay += s.pay; r.profit += s.profit;
+    r.count += s.count; r.mat += s.mat; r.retail += s.retail;
+    if(s.inc > 0) r.activeMonths++;
+  }
+  r.avg = r.count ? Math.round(r.inc / r.count) : 0;
+  r.mAvg = r.activeMonths ? Math.round(r.inc / r.activeMonths) : 0;
+  return r;
+}
+/* 年間サマリーカード: 今年と昨年を一括比較(売上・平均・利益など) */
+function yearCardHtml(yr){
   const prevYr = String(+yr - 1);
+  const a = yearSummary(prevYr), b = yearSummary(yr);
+  const head = `<h2>年間サマリー <span class="h2-sub">${prevYr}年 vs ${yr}年(実績のある月の合計)</span></h2>`;
+  if(!a.inc && !b.inc) return "";
+  const pct = (p, c) => p > 0 ? `<span style="color:${c >= p ? "var(--good)" : "var(--crit)"}">${(c >= p ? "+" : "−") + Math.abs(Math.round((c - p) / p * 100))}%</span>` : "—";
+  const rateNote = (v, base) => base > 0 ? `<span style="color:var(--muted);font-size:12px">(${Math.round(v / base * 100)}%)</span>` : "";
+  const rows = [
+    ["年間売上", yen(a.inc), yen(b.inc), pct(a.inc, b.inc)],
+    ["月平均売上", `${yen(a.mAvg)}${a.activeMonths ? `<span style="color:var(--muted);font-size:12px">(${a.activeMonths}ヶ月)</span>` : ""}`,
+      `${yen(b.mAvg)}${b.activeMonths ? `<span style="color:var(--muted);font-size:12px">(${b.activeMonths}ヶ月)</span>` : ""}`, pct(a.mAvg, b.mAvg)],
+    ["来店客数", a.count + "件", b.count + "件", pct(a.count, b.count)],
+    ["客単価", yen(a.avg), yen(b.avg), pct(a.avg, b.avg)],
+    ["店販売上", `${yen(a.retail)}${rateNote(a.retail, a.inc)}`, `${yen(b.retail)}${rateNote(b.retail, b.inc)}`, pct(a.retail, b.retail)],
+    ["年間支出", yen(a.exp), yen(b.exp), pct(a.exp, b.exp)],
+    ["うち材料費", `${yen(a.mat)}${rateNote(a.mat, a.inc)}`, `${yen(b.mat)}${rateNote(b.mat, b.inc)}`, pct(a.mat, b.mat)],
+    ["従業員給料", yen(a.pay), yen(b.pay), pct(a.pay, b.pay)],
+    [`<strong>年間利益(給料込み)</strong>`, `<strong style="color:${a.profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(a.profit)}</strong>`,
+      `<strong style="color:${b.profit >= 0 ? "var(--good)" : "var(--crit)"}">${yen(b.profit)}</strong>`, pct(a.profit, b.profit)]
+  ];
+  /* 売上・利益の2年比較ミニバー(最大値を100%として幅を揃える) */
+  const barMax = Math.max(1, a.inc, b.inc);
+  const bar = (label, v, color) => `<div><div class="hb-top"><span class="hb-label">${label}</span><span class="hb-val">${yen(v)}</span></div>
+    <div class="hb-track"><div class="hb-fill" style="width:${Math.min(100, Math.max(0, v) / barMax * 100).toFixed(1)}%;background:${color}"></div></div></div>`;
+  return `<div class="card">${head}
+    <div class="hbar" style="margin-bottom:14px">
+      ${bar(`${prevYr}年 売上`, a.inc, "var(--axis)")}
+      ${bar(`${yr}年 売上`, b.inc, "var(--income)")}
+      ${bar(`${prevYr}年 利益`, Math.max(0, a.profit), "var(--axis)")}
+      ${bar(`${yr}年 利益`, Math.max(0, b.profit), "var(--expense)")}
+    </div>
+    <div class="twrap"><table>
+      <tr><th></th><th class="num">${prevYr}年</th><th class="num">${yr}年</th><th class="num">増減</th></tr>
+      ${rows.map(r => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td><td class="num">${r[3]}</td></tr>`).join("")}
+    </table></div>
+    <div class="hint">実績のある月だけを合計しています(月平均売上のカッコ内はその月数)。利益は「売上 − 経費 − 従業員給料」、利益のバーはマイナスの場合0として表示します。年の切り替えは上の日報一覧の ‹ › で月を動かしてください(表示中の月の年に連動)。</div>
+  </div>`;
+}
+/* 売上の前年対比カード(1〜12月の月別売上を前年と並べる) */
+function yoyCardHtml(yr){  const prevYr = String(+yr - 1);
   const cur = [], prev = [];
   for(let i = 1; i <= 12; i++){
     const mm = String(i).padStart(2, "0");
