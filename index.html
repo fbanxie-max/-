@@ -979,7 +979,7 @@ VIEWS.dash = function(){
       <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−従業員給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
     </div>
-    <div class="card"><h2>日別売上 <span class="h2-sub">直近7日 ・ 行をタップでその日のレジ締めへ</span> <button class="btn sm" onclick="openDsheet()">まとめて入力(1ヶ月表)</button></h2>
+    <div class="card"><h2>日別売上 <span class="h2-sub">直近7日 ・ 数字をタップで入力</span> <button class="btn sm" onclick="openDsheet()">まとめて入力(1ヶ月表)</button></h2>
       <div class="twrap"><table>
         <tr><th>日付</th><th class="num">売上</th><th class="num">うち店販</th><th class="num">件数</th><th>レジ締め</th><th></th></tr>
         ${Array.from({length: 7}, (_, i) => addDays(tday, -i)).map(d => {
@@ -987,16 +987,16 @@ VIEWS.dash = function(){
           const v = list.reduce((a, t) => a + num(t.amount), 0);
           const rt = list.filter(t => t.category === "店販(商品売上)").reduce((a, t) => a + num(t.amount), 0);
           const closed = S.closings[d] && S.closings[d].closed;
-          return `<tr class="rowlink" onclick="openDayClose('${d}')"${d === tday ? ' style="background:var(--accent-soft)"' : ""}>
+          return `<tr${d === tday ? ' style="background:var(--accent-soft)"' : ""}>
             <td style="white-space:nowrap;font-weight:600">${fmtDate(d)}${d === tday ? ' <span class="chip info">今日</span>' : ""}</td>
-            <td class="num payedit" style="font-weight:700" onclick="event.stopPropagation();openDailySale('${d}','tech')" title="タップして売上を入力"><span class="pe-v">${yen(v)}</span></td>
-            <td class="num payedit" style="color:var(--ink2)" onclick="event.stopPropagation();openDailySale('${d}','retail')" title="タップして店販売上を入力"><span class="pe-v">${rt ? yen(rt) : "—"}</span></td>
+            <td class="num payedit" style="font-weight:700" onclick="editDailyCell('${d}','tech')" title="タップして技術売上を入力"><span class="pe-v">${yen(v)}</span></td>
+            <td class="num payedit" style="color:var(--ink2)" onclick="editDailyCell('${d}','retail')" title="タップして店販売上を入力"><span class="pe-v">${rt ? yen(rt) : "—"}</span></td>
             <td class="num">${salesCount(list)}件</td>
-            <td>${closed ? '<span class="chip good">締め済</span>' : (v > 0 ? '<span class="chip warn">未締め</span>' : '<span style="color:var(--muted);font-size:12px">—</span>')}</td>
-            <td><button class="btn sm ghost" onclick="event.stopPropagation();openDailySale('${d}')">入力</button></td>
+            <td class="payedit" style="white-space:nowrap" onclick="openDayClose('${d}')" title="タップでその日のレジ締めへ">${closed ? '<span class="chip good">締め済</span>' : (v > 0 ? '<span class="chip warn">未締め</span>' : '<span class="chip mut">レジ締め</span>')} <span style="color:var(--muted)">›</span></td>
+            <td><button class="btn sm ghost" onclick="openDailySale('${d}')">入力</button></td>
           </tr>`; }).join("")}
       </table></div>
-            <div class="hint"><strong>売上・店販の欄を直接タップ</strong>するとその日の入力が開きます(点線の欄はタップ可・同じ日は上書き)。経費は「+ 1日の経費まとめ」で合計額だけ入れればOK(勘定科目なし・同じ日は上書き)。数日分たまったら「まとめて入力(1ヶ月表)」で一気に記帳・CSV取り込みもできます。1件ずつの記録(レジ・タップ会計・収支管理)と併用もできます。</div>
+            <div class="hint"><strong>売上・店販の数字(点線)をタップ</strong>すると、その項目だけをその場で入力できます。「入力」はメモ・支払方法込みの入力、右のチップをタップするとその日のレジ締めが開きます。経費は「+ 1日の経費まとめ」で合計額だけ入れればOK。数日分たまったら「まとめて入力(1ヶ月表)」・CSV取り込みも使えます。</div>
     </div>
     <div class="grid2" style="margin-bottom:16px">
       <div class="card"><h2>今日の予約 <span class="h2-sub">${apptsToday.length}件</span></h2>
@@ -1226,10 +1226,10 @@ VIEWS.reports = function(){
         <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th class="num">客単価</th><th class="num">支出</th><th class="num">差引</th><th>レジ締め</th><th>メモ</th></tr>
         ${days.map(x => `<tr class="rowlink" onclick="openDayClose('${x.d}')"${x.d === tday ? ' style="background:var(--accent-soft)"' : ""}>
           <td style="white-space:nowrap;font-weight:600">${fmtDate(x.d)}</td>
-          <td class="num payedit" onclick="event.stopPropagation();openDailySale('${x.d}','tech')" title="タップして売上を入力"><span class="pe-v">${yen(x.inc)}</span></td>
+          <td class="num payedit" onclick="event.stopPropagation();editDailyCell('${x.d}','tech')" title="タップして技術売上を入力"><span class="pe-v">${yen(x.inc)}</span></td>
           <td class="num">${x.count}件</td>
           <td class="num">${x.count ? yen(Math.round(x.inc / x.count)) : "—"}</td>
-          <td class="num payedit" onclick="event.stopPropagation();openDailyExp('${x.d}')" title="タップして経費を入力"><span class="pe-v">${yen(x.exp)}</span></td>
+          <td class="num payedit" onclick="event.stopPropagation();editDailyCell('${x.d}','exp')" title="タップして経費を入力"><span class="pe-v">${yen(x.exp)}</span></td>
           <td class="num" style="color:${x.inc - x.exp >= 0 ? "var(--good)" : "var(--crit)"}">${yen(x.inc - x.exp)}</td>
           <td>${x.closed
             ? `<span class="chip good">締め済</span>${x.diff !== 0 ? ` <span style="color:var(--crit);font-size:12px">${x.diff > 0 ? "+" : "−"}${yen(Math.abs(x.diff))}</span>` : ""}`
@@ -1530,6 +1530,22 @@ function writeDailyExp(d, val, memo){
   S.tx = S.tx.filter(t => !(t.dailyExp && t.type === "expense" && t.date === d));
   if(val > 0) S.tx.push({id: uid(), dailyExp: true, type: "expense", date: d, category: "経費まとめ", amount: val, memo: memo || "1日の経費まとめ", staffId: ""});
 }
+/* 数字の欄をタップしたとき用: その項目だけを編集する小さな入力。
+   他の項目(技術/店販のもう片方・メモ・支払方法)は保持したまま上書きする */
+window.editDailyCell = function(d, kind){
+  const cur = dailyDayData(d);
+  const label = kind === "tech" ? "技術売上" : kind === "retail" ? "店販売上" : "経費の合計";
+  const val = kind === "tech" ? cur.tech : kind === "retail" ? cur.retail : cur.expAmt;
+  openForm({ title: `${fmtDate(d)} の${label}`, saveLabel: "保存(同じ日は上書き)",
+    fields: [{key:"amount", label: `${label}(円)`, type:"number", value: val > 0 ? val : "", min:0}],
+    onsave: v => {
+      const nv = Math.max(0, num(v.amount));
+      if(kind === "exp") writeDailyExp(d, nv, cur.memo);
+      else writeDailySale(d, kind === "tech" ? nv : cur.tech, kind === "retail" ? nv : cur.retail, cur.memo, cur.pay);
+      save(); toast(nv > 0 ? `${fmtDate(d)}の${label}を${yen(nv)}にしました` : `${fmtDate(d)}の${label}を削除しました`); render();
+    } });
+  const ff = $("ff-amount"); if(ff){ ff.focus(); if(ff.select) ff.select(); }
+};
 window.openDailySale = function(date, focus){
   const d = date || todayStr();
   const cur = { date: d };
