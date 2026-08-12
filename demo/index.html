@@ -839,7 +839,7 @@ const V = {}; // view state
 V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth(); V.reportMonth = thisMonth(); V.reportsMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
-V.closeDate = todayStr(); V.lostDays = 60; V.bulkN = 24;
+V.closeDate = todayStr(); V.lostDays = 60; V.bulkN = 24; V.dsheetMonth = thisMonth(); V.expBulkMonth = thisMonth();
 V.orderFilter = "all"; V.custSel = null; V.custQ = ""; V.chartN = 6;
 V.taxYear = +todayStr().slice(0, 4);
 V.sperfMonth = thisMonth();
@@ -979,7 +979,7 @@ VIEWS.dash = function(){
       <div class="tile"><div class="t-label">${fmtMonth(m)}の支出</div><div class="t-val">${yen(s.exp)}</div><div class="t-note">うち材料費 ${yen(s.mat)}${s.inc > 0 ? `(売上比${Math.round(s.mat / s.inc * 100)}%)` : ""}</div></div>
       <div class="tile"><div class="t-label">${fmtMonth(m)}の利益</div><div class="t-val ${s.profit >= 0 ? "t-good" : "t-crit"}">${yen(s.profit)}</div><div class="t-note">売上−経費−従業員給料${s.pay ? `(給料 ${yen(s.pay)})` : ""}</div></div>
     </div>
-    <div class="card"><h2>日別売上 <span class="h2-sub">直近7日 ・ 行をタップでその日のレジ締めへ</span></h2>
+    <div class="card"><h2>日別売上 <span class="h2-sub">直近7日 ・ 行をタップでその日のレジ締めへ</span> <button class="btn sm" onclick="openDsheet()">まとめて入力(1ヶ月表)</button></h2>
       <div class="twrap"><table>
         <tr><th>日付</th><th class="num">売上</th><th class="num">うち店販</th><th class="num">件数</th><th>レジ締め</th><th></th></tr>
         ${Array.from({length: 7}, (_, i) => addDays(tday, -i)).map(d => {
@@ -996,7 +996,7 @@ VIEWS.dash = function(){
             <td><button class="btn sm ghost" onclick="event.stopPropagation();openDailySale('${d}')">入力</button></td>
           </tr>`; }).join("")}
       </table></div>
-            <div class="hint">「入力」でその日の技術売上・店販売上をまとめて記入できます(同じ日は上書き)。経費は「+ 1日の経費まとめ」で合計額だけ入れればOK(勘定科目なし・同じ日は上書き)。1件ずつの記録(レジ・タップ会計・収支管理)と併用もできます。</div>
+            <div class="hint">「入力」でその日の技術売上・店販売上をまとめて記入できます(同じ日は上書き)。経費は「+ 1日の経費まとめ」で合計額だけ入れればOK(勘定科目なし・同じ日は上書き)。数日分たまったら「まとめて入力(1ヶ月表)」で一気に記帳・CSV取り込みもできます。1件ずつの記録(レジ・タップ会計・収支管理)と併用もできます。</div>
     </div>
     <div class="grid2" style="margin-bottom:16px">
       <div class="card"><h2>今日の予約 <span class="h2-sub">${apptsToday.length}件</span></h2>
@@ -1220,7 +1220,7 @@ VIEWS.reports = function(){
   const months = lastMonths(12).filter(mm => mm === thisMonth() || txInMonth(mm).length).reverse();
   $("main").innerHTML =
     pageHead("レポート一覧", "日報と月報をまとめて確認できます。行をタップすると詳細へ移動します",
-      `<button class="btn" onclick="openBulk()">過去実績のまとめ入力</button>`) +
+      `<button class="btn" onclick="openDsheet()">日別まとめ入力(1ヶ月表)</button><button class="btn" onclick="openBulk()">過去実績のまとめ入力</button>`) +
     `<div class="card"><h2>日報一覧 ${monthNav(m, "reportsNav")} <button class="btn sm" onclick="exportDailyCsv()">CSV出力</button></h2>
       <div class="twrap">${days.length ? `<table>
         <tr><th>日付</th><th class="num">売上</th><th class="num">件数</th><th class="num">客単価</th><th class="num">支出</th><th class="num">差引</th><th>レジ締め</th><th>メモ</th></tr>
@@ -1502,6 +1502,34 @@ function txFields(type){
    技術売上・店販売上を1日1回まとめて記録する。同じ日に入れ直すと上書き(重複しない)。
    dailyフラグつきで保存し、収支管理から編集を開いたときもこのフォームに戻す */
 const DAILY_CATS = [["tech", "技術売上"], ["retail", "店販(商品売上)"]];
+/* その日のまとめ入力の現在値と、まとめ以外の記録(レジ・タップ会計など)の参考額 */
+function dailyDayData(d){
+  const inc = S.tx.filter(t => t.daily && t.type === "income" && t.date === d);
+  const exp = S.tx.filter(t => t.dailyExp && t.type === "expense" && t.date === d);
+  const sumCat = cat => inc.filter(t => t.category === cat).reduce((a,t) => a + num(t.amount), 0);
+  const memoInc = inc.length && inc[0].memo !== "1日まとめ" ? inc[0].memo : "";
+  const memoExp = exp.length && exp[0].memo !== "1日の経費まとめ" ? exp[0].memo : "";
+  return {
+    tech: sumCat("技術売上"), retail: sumCat("店販(商品売上)"),
+    expAmt: exp.reduce((a,t) => a + num(t.amount), 0),
+    memo: memoInc || memoExp, pay: inc.length ? inc[0].pay : "",
+    othInc: S.tx.filter(t => t.type === "income" && t.date === d && !t.daily).reduce((a,t) => a + num(t.amount), 0),
+    othExp: S.tx.filter(t => t.type === "expense" && t.date === d && !t.dailyExp && !t.ownerDraw).reduce((a,t) => a + num(t.amount), 0)
+  };
+}
+/* 1日の売上まとめを書き込む(同じ日は上書き)。技術+店販は1会計として数える */
+function writeDailySale(d, tech, retail, memo, pay){
+  const saleId = "daily-" + d;
+  [["技術売上", tech], ["店販(商品売上)", retail]].forEach(([cat, val]) => {
+    S.tx = S.tx.filter(t => !(t.daily && t.type === "income" && t.date === d && t.category === cat));
+    if(val > 0) S.tx.push({id: uid(), daily: true, saleId, type: "income", date: d, category: cat, amount: val, memo: memo || "1日まとめ", staffId: "", pay: pay || "現金"});
+  });
+}
+/* 1日の経費まとめを書き込む(同じ日は上書き) */
+function writeDailyExp(d, val, memo){
+  S.tx = S.tx.filter(t => !(t.dailyExp && t.type === "expense" && t.date === d));
+  if(val > 0) S.tx.push({id: uid(), dailyExp: true, type: "expense", date: d, category: "経費まとめ", amount: val, memo: memo || "1日の経費まとめ", staffId: ""});
+}
 window.openDailySale = function(date){
   const d = date || todayStr();
   const cur = { date: d };
@@ -1519,13 +1547,8 @@ window.openDailySale = function(date){
       {key:"memo", label:"メモ(任意)", type:"text"}
     ],
     onsave: v => {
-      let changed = false;
-      const saleId = "daily-" + v.date; // 技術+店販の2件を1会計として数える(客数・客単価用)
-      DAILY_CATS.forEach(([k, cat]) => {
-        const val = Math.max(0, num(v[k]));
-        S.tx = S.tx.filter(t => !(t.daily && t.type === "income" && t.date === v.date && t.category === cat));
-        if(val > 0){ S.tx.push({id: uid(), daily: true, saleId, type: "income", date: v.date, category: cat, amount: val, memo: v.memo || "1日まとめ", staffId: "", pay: v.pay || "現金"}); changed = true; }
-      });
+      const changed = num(v.tech) > 0 || num(v.retail) > 0;
+      writeDailySale(v.date, Math.max(0, num(v.tech)), Math.max(0, num(v.retail)), v.memo, v.pay);
       save(); toast(changed ? `${fmtDate(v.date)}の売上まとめを保存しました` : `${fmtDate(v.date)}のまとめ入力を削除しました`); render();
     } });
 };
@@ -1544,10 +1567,180 @@ window.openDailyExp = function(date){
     ],
     onsave: v => {
       const val = Math.max(0, num(v.amount));
-      S.tx = S.tx.filter(t => !(t.dailyExp && t.type === "expense" && t.date === v.date));
-      if(val > 0) S.tx.push({id: uid(), dailyExp: true, type: "expense", date: v.date, category: "経費まとめ", amount: val, memo: v.memo || "1日の経費まとめ", staffId: ""});
+      writeDailyExp(v.date, val, v.memo);
       save(); toast(val > 0 ? `${fmtDate(v.date)}の経費 ${yen(val)} を保存しました(同じ日は上書き)` : `${fmtDate(v.date)}の経費まとめを削除しました`); render();
     } });
+};
+/* ================= daily batch sheet (日別まとめ入力シート・ナビ非掲載) =================
+   1ヶ月分の日付を表に並べ、技術売上・店販売上・経費・メモを一気に入力して1回で保存する。
+   保存の仕組みは「1日の売上まとめ」「1日の経費まとめ」と同じ(同じ日は上書き・二重計上なし)。
+   変更のない行は触らない(既存の支払方法などを保持する) */
+window.openDsheet = function(){ V.dsheetMonth = thisMonth(); go("dsheet"); };
+window.dsheetNav = d => { V.dsheetMonth = addMonths(V.dsheetMonth, d); render(); };
+VIEWS.dsheet = function(){
+  const m = V.dsheetMonth, tday = todayStr();
+  const rows = [];
+  for(let i = 1; i <= daysInMonth(m); i++){
+    const d = m + "-" + String(i).padStart(2, "0");
+    if(d > tday) break;
+    const cur = dailyDayData(d);
+    const inp = (k, val, w) => `<input id="ds-${k}-${d}" type="text" inputmode="numeric" value="${num(val) > 0 ? num(val) : ""}" style="max-width:${w || 104}px;text-align:right" oninput="dsheetTotals()" aria-label="${fmtDate(d)}の${k}">`;
+    rows.push(`<tr${d === tday ? ' style="background:var(--accent-soft)"' : ""}>
+      <td style="white-space:nowrap;font-weight:600">${fmtDate(d)}${isClosedDay(d) ? ' <span class="chip mut">休</span>' : ""}</td>
+      <td class="num">${inp("t", cur.tech)}</td>
+      <td class="num">${inp("r", cur.retail)}</td>
+      <td class="num">${inp("e", cur.expAmt)}</td>
+      <td><input id="ds-m-${d}" type="text" value="${esc(cur.memo)}" style="min-width:110px" placeholder=""></td>
+      <td class="num" style="color:var(--muted);font-size:12px;white-space:nowrap">${cur.othInc || cur.othExp ? `${yen(cur.othInc)} / ${yen(cur.othExp)}` : "—"}</td>
+    </tr>`);
+  }
+  $("main").innerHTML =
+    pageHead("日別まとめ入力", "1ヶ月分の売上・経費を表で一気に入力できます(同じ日は上書き・二重計上なし)",
+      `<button class="btn" onclick="go('dash')">‹ ダッシュボードへ</button>${monthNav(m, "dsheetNav")}<label class="btn" style="cursor:pointer">CSVを取り込む<input type="file" accept=".csv,text/csv" style="display:none" onchange="importDailyCsv(this)"></label><button class="btn pri" onclick="saveDsheet()">まとめて保存</button>`) +
+    `<div class="card">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <label for="ds-pay" style="font-size:12px;color:var(--ink2);font-weight:600">支払方法(新しく入力した日に適用)</label>
+        <select id="ds-pay" style="max-width:140px">${PAY_METHODS.map(p => `<option${p === "現金" ? " selected" : ""}>${p}</option>`).join("")}</select>
+      </div>
+      <div class="twrap">${rows.length ? `<table>
+        <tr><th>日付</th><th class="num">技術売上(円)</th><th class="num">店販売上(円)</th><th class="num">経費合計(円)</th><th>メモ</th><th class="num">他の記録(売上/経費)</th></tr>
+        ${rows.join("")}
+        <tr class="total"><td>合計</td><td class="num" id="ds-tot-t"></td><td class="num" id="ds-tot-r"></td><td class="num" id="ds-tot-e"></td><td></td><td></td></tr>
+      </table>` : `<div class="empty">${fmtMonth(m)}はまだ始まっていません</div>`}</div>
+      <div style="margin-top:12px"><button class="btn pri" onclick="saveDsheet()">まとめて保存</button></div>
+      <div class="hint">・「1日の売上/経費まとめ」と同じ記録として保存されるので、どちらから入れても同じ日は上書きされます。空欄にして保存するとその日のまとめは削除されます。<br>
+      ・<strong>「他の記録」に金額がある日</strong>はレジ会計や収支管理の個別記録がすでにあります。二重計上にならないよう、その分を除いた金額を入れるか空欄のままにしてください。<br>
+      ・CSV取り込みは「日付」列と「技術売上(または売上)」「店販売上」「経費」列があるファイルに対応しています(Excelから書き出したCSVでOK・文字コード自動判別)。</div>
+    </div>`;
+  dsheetTotals();
+};
+window.dsheetTotals = function(){
+  const m = V.dsheetMonth;
+  const sum = k => {
+    let a = 0;
+    for(let i = 1; i <= daysInMonth(m); i++){
+      const el = $(`ds-${k}-${m}-${String(i).padStart(2, "0")}`);
+      if(el) a += Math.max(0, num(el.value));
+    }
+    return a;
+  };
+  const set = (id, v) => { const el = $(id); if(el) el.textContent = yen(v); };
+  set("ds-tot-t", sum("t")); set("ds-tot-r", sum("r")); set("ds-tot-e", sum("e"));
+};
+window.saveDsheet = function(){
+  const m = V.dsheetMonth, tday = todayStr();
+  const defPay = ($("ds-pay") || {}).value || "現金";
+  const changedDays = new Set();
+  for(let i = 1; i <= daysInMonth(m); i++){
+    const d = m + "-" + String(i).padStart(2, "0");
+    if(d > tday) break;
+    const tEl = $("ds-t-" + d); if(!tEl) continue;
+    const cur = dailyDayData(d);
+    const t = Math.max(0, num(tEl.value)), r = Math.max(0, num(($("ds-r-" + d) || {}).value));
+    const e = Math.max(0, num(($("ds-e-" + d) || {}).value)), memo = (($("ds-m-" + d) || {}).value || "").trim();
+    if(t !== cur.tech || r !== cur.retail || ((t || r) && memo !== cur.memo)){
+      writeDailySale(d, t, r, memo, cur.pay || defPay);
+      changedDays.add(d);
+    }
+    if(e !== cur.expAmt || (e > 0 && memo !== cur.memo)){
+      writeDailyExp(d, e, memo);
+      changedDays.add(d);
+    }
+  }
+  if(!changedDays.size){ toast("変更はありませんでした"); return; }
+  save(); toast(`${changedDays.size}日分のまとめ入力を保存しました`); render();
+};
+/* ---- 日別CSV取り込み ----
+   「日付」列+「技術売上(または売上)」「店販売上」「経費」「メモ」列のCSVを読み、
+   日別まとめ入力として一括登録する。文字コードはShift_JIS/UTF-8を自動判別。
+   CSVに無い列は触らない(経費列が無ければ既存の経費まとめはそのまま) */
+function parseDailyCsv(text){
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if(!lines.length) return { error: "空のファイルです" };
+  /* Excel書き出しのCSVは「"¥40,000"」のようにクォート内にカンマが入るため、クォート対応で分割する */
+  const cells = line => {
+    const out = []; let cur = "", q = false;
+    for(let i = 0; i < line.length; i++){
+      const ch = line[i];
+      if(q){
+        if(ch === '"'){ if(line[i + 1] === '"'){ cur += '"'; i++; } else q = false; }
+        else cur += ch;
+      } else if(ch === '"') q = true;
+      else if(ch === ","){ out.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(s2 => s2.trim());
+  };
+  const hi = lines.findIndex(l => l.includes("日付"));
+  if(hi < 0) return { error: "「日付」列が見つかりません(1行目に「日付,技術売上,店販売上,経費,メモ」のような見出しを付けてください)" };
+  const head = cells(lines[hi]);
+  const idx = pred => head.findIndex(pred);
+  const iDate = idx(h => h.includes("日付"));
+  const iTech = idx(h => h.includes("技術"));
+  const iRetail = idx(h => h.includes("店販"));
+  const iSales = idx(h => h.includes("売上") && !h.includes("技術") && !h.includes("店販"));
+  const iExp = idx(h => h.includes("経費") || h.includes("支出"));
+  const iMemo = idx(h => h.includes("メモ") || h.includes("備考"));
+  if(iTech < 0 && iSales < 0 && iExp < 0) return { error: "金額の列が見つかりません(「技術売上」「売上」「経費」のいずれかの見出しが必要です)" };
+  const amt = s => Math.max(0, num(String(s ?? "").replace(/[¥￥円]/g, "")));
+  const tday = todayStr();
+  const rows = []; let skipped = 0, future = 0;
+  for(let i = hi + 1; i < lines.length; i++){
+    const c = cells(lines[i]);
+    const mDate = String(c[iDate] || "").match(/^(\d{4})[\/\-\.年](\d{1,2})[\/\-\.月](\d{1,2})/);
+    if(!mDate){ if((c[iDate] || "").trim()) skipped++; continue; }
+    const d = `${mDate[1]}-${String(+mDate[2]).padStart(2, "0")}-${String(+mDate[3]).padStart(2, "0")}`;
+    if(d > tday){ future++; continue; }
+    const retail = iRetail >= 0 ? amt(c[iRetail]) : 0;
+    const tech = iTech >= 0 ? amt(c[iTech]) : (iSales >= 0 ? Math.max(0, amt(c[iSales]) - retail) : 0);
+    rows.push({ d, tech, retail, exp: iExp >= 0 ? amt(c[iExp]) : null, memo: iMemo >= 0 ? String(c[iMemo] || "").trim() : "" });
+  }
+  if(!rows.length) return { error: "取り込める行がありませんでした(日付は 2026/8/1 や 2026-08-01 の形式で、未来の日付は対象外です)" };
+  return { rows, hasExp: iExp >= 0, hasSales: iTech >= 0 || iSales >= 0, skipped, future };
+}
+window.importDailyCsv = function(input){
+  const file = input.files && input.files[0]; if(!file) return;
+  input.value = "";
+  const rd = new FileReader();
+  rd.onload = () => {
+    let text = "";
+    try{ text = new TextDecoder("shift_jis").decode(rd.result); }catch(e){}
+    if(!text.includes("日付")){
+      try{ const t2 = new TextDecoder("utf-8").decode(rd.result); if(t2.includes("日付")) text = t2; }catch(e){}
+    }
+    const p = parseDailyCsv(text);
+    if(p.error){ toast(p.error); return; }
+    window._dcRows = p;
+    const dates = p.rows.map(r => r.d).sort();
+    const dup = p.rows.filter(r => { const cur = dailyDayData(r.d); return cur.tech || cur.retail || cur.expAmt; }).length;
+    const totT = p.rows.reduce((a,r) => a + r.tech, 0), totR = p.rows.reduce((a,r) => a + r.retail, 0), totE = p.rows.reduce((a,r) => a + (r.exp || 0), 0);
+    openModal(`<h3>日別CSVの取り込み</h3>
+      <div class="twrap"><table>
+        <tr><th>期間</th><td>${fmtDate(dates[0])} 〜 ${fmtDate(dates[dates.length - 1])}(${p.rows.length}日分)</td></tr>
+        ${p.hasSales ? `<tr><th>売上合計</th><td>技術 ${yen(totT)} ・ 店販 ${yen(totR)}</td></tr>` : ""}
+        ${p.hasExp ? `<tr><th>経費合計</th><td>${yen(totE)}</td></tr>` : ""}
+        ${dup ? `<tr><th>上書き</th><td><span class="chip warn">${dup}日</span> すでにまとめ入力がある日は上書きされます</td></tr>` : ""}
+        ${p.skipped ? `<tr><th>読めない行</th><td>${p.skipped}行(日付の形式が違うためスキップ)</td></tr>` : ""}
+        ${p.future ? `<tr><th>未来の日付</th><td>${p.future}行(対象外)</td></tr>` : ""}
+      </table></div>
+      <div class="hint">支払方法は「その他」として記録されます(レジ締めの現金照合には混ざりません)。CSVに無い列(${p.hasExp ? "" : "経費"}${!p.hasSales ? "売上" : ""})は既存の入力を変更しません。</div>
+      <div class="m-foot"><button class="btn" onclick="closeModal()">キャンセル</button>
+      <button class="btn pri" onclick="applyDailyCsv()">${p.rows.length}日分を取り込む</button></div>`);
+  };
+  rd.readAsArrayBuffer(file);
+};
+window.applyDailyCsv = function(){
+  const p = window._dcRows; if(!p) return;
+  let n = 0;
+  p.rows.forEach(r => {
+    if(p.hasSales){ writeDailySale(r.d, r.tech, r.retail, r.memo, "その他"); }
+    if(p.hasExp && r.exp !== null){ writeDailyExp(r.d, r.exp, r.memo); }
+    n++;
+  });
+  window._dcRows = null;
+  V.dsheetMonth = p.rows[p.rows.length - 1].d.slice(0, 7);
+  closeModal(); save(); toast(`${n}日分を取り込みました`); render();
 };
 window.addTx = function(type){
   openForm({ title: type === "income" ? "収入を記録" : "支出を記録", fields: txFields(type),
