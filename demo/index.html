@@ -282,7 +282,7 @@ td.today-col{background:var(--accent-soft)}
 "use strict";
 /* アプリのバージョン(更新のたびに日付を進める)。設定画面とサイドバーに表示され、
    「更新が反映されているか」を端末で確認するための目印になる */
-const APP_VER = "2026.08.12-1";
+const APP_VER = "2026.08.12-2";
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-demo-v1";
 /* 保存できない環境の警告。claude.aiのArtifactなどサンドボックス・埋め込み表示では
@@ -1608,19 +1608,19 @@ VIEWS.dsheet = function(){
     const d = m + "-" + String(i).padStart(2, "0");
     if(d > tday) break;
     const cur = dailyDayData(d);
-    const inp = (k, val, w) => `<input id="ds-${k}-${d}" type="text" inputmode="numeric" value="${num(val) > 0 ? num(val) : ""}" style="max-width:${w || 104}px;text-align:right" oninput="dsheetTotals()" aria-label="${fmtDate(d)}の${k}">`;
+    const inp = (k, val, w) => `<input id="ds-${k}-${d}" type="text" inputmode="numeric" enterkeyhint="next" value="${num(val) > 0 ? num(val) : ""}" style="max-width:${w || 104}px;text-align:right" oninput="dsheetTotals()" onkeydown="dsheetKey(event,this)" aria-label="${fmtDate(d)}の${k}">`;
     rows.push(`<tr${d === tday ? ' style="background:var(--accent-soft)"' : ""}>
       <td style="white-space:nowrap;font-weight:600">${fmtDate(d)}${isClosedDay(d) ? ' <span class="chip mut">休</span>' : ""}</td>
       <td class="num">${inp("t", cur.tech)}</td>
       <td class="num">${inp("r", cur.retail)}</td>
       <td class="num">${inp("e", cur.expAmt)}</td>
-      <td><input id="ds-m-${d}" type="text" value="${esc(cur.memo)}" style="min-width:110px" placeholder=""></td>
+      <td><input id="ds-m-${d}" type="text" enterkeyhint="next" value="${esc(cur.memo)}" style="min-width:110px" onkeydown="dsheetKey(event,this)" placeholder=""></td>
       <td class="num" style="color:var(--muted);font-size:12px;white-space:nowrap">${cur.othInc || cur.othExp ? `${yen(cur.othInc)} / ${yen(cur.othExp)}` : "—"}</td>
     </tr>`);
   }
   $("main").innerHTML =
     pageHead("日別まとめ入力", "1ヶ月分の売上・経費を表で一気に入力できます(同じ日は上書き・二重計上なし)",
-      `<button class="btn" onclick="go('dash')">‹ ダッシュボードへ</button>${monthNav(m, "dsheetNav")}<label class="btn" style="cursor:pointer">CSVを取り込む<input type="file" accept=".csv,text/csv" style="display:none" onchange="importDailyCsv(this)"></label><button class="btn pri" onclick="saveDsheet()">まとめて保存</button>`) +
+      `<button class="btn" onclick="go('dash')">‹ ダッシュボードへ</button>${monthNav(m, "dsheetNav")}<button class="btn" onclick="dlDsheetTemplate()">CSVひな形</button><label class="btn" style="cursor:pointer">CSVを取り込む<input type="file" accept=".csv,text/csv" style="display:none" onchange="importDailyCsv(this)"></label><button class="btn pri" onclick="saveDsheet()">まとめて保存</button>`) +
     `<div class="card">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
         <label for="ds-pay" style="font-size:12px;color:var(--ink2);font-weight:600">支払方法(新しく入力した日に適用)</label>
@@ -1632,11 +1632,34 @@ VIEWS.dsheet = function(){
         <tr class="total"><td>合計</td><td class="num" id="ds-tot-t"></td><td class="num" id="ds-tot-r"></td><td class="num" id="ds-tot-e"></td><td></td><td></td></tr>
       </table>` : `<div class="empty">${fmtMonth(m)}はまだ始まっていません</div>`}</div>
       <div style="margin-top:12px"><button class="btn pri" onclick="saveDsheet()">まとめて保存</button></div>
-      <div class="hint">・「1日の売上/経費まとめ」と同じ記録として保存されるので、どちらから入れても同じ日は上書きされます。空欄にして保存するとその日のまとめは削除されます。<br>
+      <div class="hint">・<strong>数字を打ってEnter(スマホは「次へ」)で翌日の欄へ移動</strong>します。「45000⏎38000⏎…」と流れるように入力できます。<br>
+      ・過去分をたくさん入れるなら<strong>「CSVひな形」→Excelで埋める→「CSVを取り込む」</strong>が最速です。ひな形には日付と入力済みの値が入っています(行をコピーして日付を変えれば複数月分を1ファイルにしてもOK)。<br>
+      ・「1日の売上/経費まとめ」と同じ記録として保存されるので、どちらから入れても同じ日は上書きされます。空欄にして保存するとその日のまとめは削除されます。<br>
       ・<strong>「他の記録」に金額がある日</strong>はレジ会計や収支管理の個別記録がすでにあります。二重計上にならないよう、その分を除いた金額を入れるか空欄のままにしてください。<br>
-      ・CSV取り込みは「日付」列と「技術売上(または売上)」「店販売上」「経費」列があるファイルに対応しています(Excelから書き出したCSVでOK・文字コード自動判別)。</div>
+      ・CSV取り込みは「日付」列と「技術売上(または売上)」「店販売上」「経費」列があるファイルに対応しています(Excelから書き出したCSVでOK・サロンボード等の日別集計CSVも列名が合えばそのまま取り込めます・文字コード自動判別)。</div>
     </div>`;
   dsheetTotals();
+};
+/* Enter(スマホは「次へ」)で同じ列の翌日へ移動。数字→Enter→数字→Enter…と流れるように入力できる */
+window.dsheetKey = function(e, el){
+  if(e.key !== "Enter") return;
+  e.preventDefault();
+  const mt = el.id.match(/^ds-(t|r|e|m)-(.+)$/);
+  if(!mt) return;
+  const next = $(`ds-${mt[1]}-${addDays(mt[2], 1)}`);
+  if(next){ next.focus(); if(next.select) next.select(); try{ next.scrollIntoView({ block: "center" }); }catch(e2){} }
+  else el.blur();
+};
+/* この月の入力用CSVひな形(既存の入力値入り)。Excelで埋めて「CSVを取り込む」で戻せる */
+window.dlDsheetTemplate = function(){
+  const m = V.dsheetMonth;
+  const rows = [["日付","技術売上","店販売上","経費","メモ"]];
+  for(let i = 1; i <= daysInMonth(m); i++){
+    const d = m + "-" + String(i).padStart(2, "0");
+    const cur = dailyDayData(d);
+    rows.push([d, cur.tech || "", cur.retail || "", cur.expAmt || "", cur.memo || ""]);
+  }
+  dlCSV(`日別入力ひな形_${m}.csv`, rows);
 };
 window.dsheetTotals = function(){
   const m = V.dsheetMonth;
