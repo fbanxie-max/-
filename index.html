@@ -80,6 +80,7 @@ body{
 .navbtn.on{background:var(--accent-soft);color:var(--accent);font-weight:700}
 .navbtn .nb-dot{width:6px;height:6px;border-radius:50%;background:transparent;flex-shrink:0}
 .navbtn.on .nb-dot{background:var(--accent)}
+.navbtn.navmore{display:none}
 .nav-sec{font-size:10.5px;color:var(--muted);letter-spacing:.12em;padding:14px 12px 4px;text-transform:uppercase}
 /* ---- main ---- */
 #main{flex:1;min-width:0;padding:24px 28px 64px;max-width:1200px}
@@ -178,6 +179,7 @@ input[type=checkbox]{width:auto}
   font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:60;max-width:90vw;
 }
 #toast.show{opacity:1;transform:translate(-50%,0)}
+#toast.actionable{pointer-events:auto}
 @media (prefers-reduced-motion: reduce){#toast{transition:none}}
 /* ---- misc ---- */
 .empty{color:var(--muted);font-size:13px;padding:18px 4px;text-align:center}
@@ -237,6 +239,12 @@ td.today-col{background:var(--accent-soft)}
   .brand .b-sub{display:none}
   .navbtn{width:auto;white-space:nowrap;padding:6px 10px}
   .nav-sec{display:none}
+  /* よく使う5項目以外は「その他 ▾」を押したときだけ表示(横スクロールを短く) */
+  .navbtn.navmore{display:flex}
+  #sidebar:not(.morein) .navbtn.nav2{display:none}
+  /* グラフはスマホでは縮小せず横スクロールで読めるサイズを保つ */
+  .chartwrap{overflow-x:auto}
+  .chartwrap svg{min-width:560px}
   #main{padding:16px 14px 56px}
   .f-2col{grid-template-columns:1fr}
   /* iOSは16px未満の入力欄タップで画面が自動ズームするため、スマホでは16pxにする */
@@ -282,7 +290,7 @@ td.today-col{background:var(--accent-soft)}
 "use strict";
 /* アプリのバージョン(更新のたびに日付を進める)。設定画面とサイドバーに表示され、
    「更新が反映されているか」を端末で確認するための目印になる */
-const APP_VER = "2026.08.12-2";
+const APP_VER = "2026.09.01-1";
 /* ================= state ================= */
 const LS_KEY = "salon-mgr-v1";
 /* 保存できない環境の警告。claude.aiのArtifactなどサンドボックス・埋め込み表示では
@@ -436,8 +444,35 @@ function manualStaffSales(stId, m){
 const txStaffSales = (stId, m) => txInMonth(m).filter(t => t.type === "income" && t.staffId === stId).reduce((a, t) => a + num(t.amount), 0);
 const mergedStaffSales = (stId, m) => { const v = manualStaffSales(stId, m); return v !== null ? v : txStaffSales(stId, m); };
 function toast(msg){
-  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  const t = $("toast"); t.textContent = msg; t.classList.remove("actionable"); t.classList.add("show");
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+/* ---- 削除の「元に戻す」 ----
+   削除直後のトーストに戻すボタンを出す(7秒)。復元は削除時に作ったクロージャで行う */
+let _undo = null;
+window.doUndo = function(){
+  if(!_undo) return;
+  try{ _undo(); }catch(e){}
+  _undo = null;
+  save(); toast("元に戻しました"); render();
+};
+function undoToast(msg, restore){
+  _undo = restore;
+  const t = $("toast");
+  t.innerHTML = `${esc(msg)}<button class="btn sm" style="margin-left:10px" onclick="doUndo()">元に戻す</button>`;
+  t.classList.add("show"); t.classList.add("actionable");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => { t.classList.remove("show"); t.classList.remove("actionable"); _undo = null; }, 7000);
+}
+/* 配列からidで1件削除して、元に戻せるトーストを出す共通処理 */
+function delWithUndo(listName, id, label, extraRestore){
+  const idx = S[listName].findIndex(x => x.id === id);
+  if(idx < 0) return;
+  const item = S[listName][idx];
+  S[listName].splice(idx, 1);
+  save();
+  undoToast(`${label}を削除しました`, () => { S[listName].splice(Math.min(idx, S[listName].length), 0, item); if(extraRestore) extraRestore(); });
+  render();
 }
 /* categories */
 const INCOME_CATS = ["カット","カラー","パーマ","縮毛矯正","トリートメント","ヘッドスパ","セット・着付け","店販(商品売上)","その他収入"];
@@ -842,18 +877,24 @@ const V = {}; // view state
 V.moneyMonth = thisMonth(); V.rcptMonth = thisMonth(); V.payMonth = thisMonth(); V.reportMonth = thisMonth(); V.reportsMonth = thisMonth();
 V.weekStart = mondayOf(todayStr()); V.apptDate = todayStr();
 V.apptMode = "day"; V.apptWeek = mondayOf(todayStr());
-V.closeDate = todayStr(); V.lostDays = 60; V.bulkN = 24; V.dsheetMonth = thisMonth(); V.expBulkMonth = thisMonth();
+V.closeDate = todayStr(); V.lostDays = 60; V.bulkN = 24; V.dsheetMonth = thisMonth(); V.expBulkMonth = thisMonth(); V.moneyQ = ""; V.navMore = false;
 V.orderFilter = "all"; V.custSel = null; V.custQ = ""; V.chartN = 6;
 V.taxYear = +todayStr().slice(0, 4);
 V.sperfMonth = thisMonth();
 function go(view){ cur = view; render(); window.scrollTo(0,0); }
+/* スマホで常に見せる主要メニュー(それ以外は「その他 ▾」で開閉。PCは常に全表示) */
+const PRIMARY_NAV = ["dash", "appts", "money", "closing", "reports"];
+window.toggleNavMore = function(){ V.navMore = !V.navMore; render(); };
 function render(){
+  const moreOpen = V.navMore || !PRIMARY_NAV.includes(cur);
+  $("sidebar").className = moreOpen ? "morein" : "";
   $("sidebar").innerHTML =
     `<div class="brand"><div class="b-name">${esc(S.settings.name)}</div><div class="b-sub">Salon Manager v${APP_VER}</div></div>` +
     NAV.map(n => n.sec
       ? `<div class="nav-sec">${esc(n.sec)}</div>`
-      : `<button class="navbtn${cur === n.id ? " on" : ""}" onclick="go('${n.id}')"><span class="nb-dot"></span>${esc(n.label)}</button>`
-    ).join("");
+      : `<button class="navbtn${cur === n.id ? " on" : ""}${PRIMARY_NAV.includes(n.id) ? "" : " nav2"}" onclick="go('${n.id}')"><span class="nb-dot"></span>${esc(n.label)}</button>`
+    ).join("") +
+    `<button class="navbtn navmore" onclick="toggleNavMore()">${moreOpen ? "メニューを閉じる ▴" : "その他 ▾"}</button>`;
   VIEWS[cur]();
   /* モバイルの横スクロールナビで、いま開いている画面のボタンが見える位置に来るようにする */
   const onBtn = document.querySelector("#sidebar .navbtn.on");
@@ -933,13 +974,22 @@ window.quickSale = function(menuId){
       {key:"amount", label:"金額(円)", type:"number", value: num(mn.price), required:true, min:0, half:true},
       {key:"pay", label:"支払方法", type:"select", options: PAY_METHODS, half:true},
       {key:"staffId", label:"担当", type:"select", blank:"(なし)", options: S.staff.map(s => [s.id, s.name])},
-      {key:"memo", label:"メモ(お客様名など・任意)", type:"text"}
+      {key:"cust", label:"お客様名(任意・入れるとカルテに来店記録が残ります)", type:"text", list: S.customers.map(c => c.name)},
+      {key:"memo", label:"メモ(任意)", type:"text"}
     ],
     onsave: v => {
       const cat = mn.cat || "その他収入";
-      S.tx.push({id: uid(), type:"income", date: todayStr(), category: cat, amount: v.amount, memo: v.memo || mn.name, staffId: v.staffId, pay: v.pay});
+      const cn = (v.cust || "").trim();
+      S.tx.push({id: uid(), type:"income", date: todayStr(), category: cat, amount: v.amount, memo: v.memo || (cn ? `${cn}様` : mn.name), staffId: v.staffId, pay: v.pay});
       const used = consumeInv(cat);
-      save(); toast(`${mn.name} ${yen(v.amount)} を記録しました${used.length ? `(在庫減算: ${used.join("、")})` : ""}`); render();
+      let extra = "";
+      if(cn){
+        let c = S.customers.find(x => x.name === cn);
+        if(!c){ c = {id: uid(), name: cn, kana:"", phone:"", birthday:"", memo:"", visits: []}; S.customers.push(c); }
+        c.visits.push({id: uid(), date: todayStr(), menu: mn.name, staffId: v.staffId, price: v.amount, note: "クイック会計"});
+        extra = `。${cn}様のカルテに記録しました`;
+      }
+      save(); toast(`${mn.name} ${yen(v.amount)} を記録しました${used.length ? `(在庫減算: ${used.join("、")})` : ""}${extra}`); render();
     } });
 };
 VIEWS.dash = function(){
@@ -966,6 +1016,19 @@ VIEWS.dash = function(){
   const lb = S.settings.lastBackup;
   if(S.tx.length >= 10 && (!lb || daysDiff(lb, tday) >= 30))
     alerts.push(`<div class="alertline"><span class="chip warn">バックアップ</span>${lb ? `最終バックアップから${daysDiff(lb, tday)}日経過` : "バックアップが未作成です"}。端末の故障・機種変更に備えて保存を <button class="btn sm" onclick="go('settings')">設定へ ›</button></div>`);
+  /* 入力の混在: 同じ日にまとめ入力と個別記録の両方があると二重計上の可能性(直近7日)。
+     定期支出の自動計上・給料計上・事業主貸・月まとめは個別記録として数えない */
+  for(let i = 0; i < 7; i++){
+    const d = addDays(tday, -i);
+    const dayTx = S.tx.filter(t => t.date === d && !t.bulk && !t.expBulk);
+    const sumInc = dayTx.filter(t => t.daily && t.type === "income").reduce((a,t) => a + num(t.amount), 0);
+    const indInc = dayTx.filter(t => !t.daily && t.type === "income").reduce((a,t) => a + num(t.amount), 0);
+    const sumExp = dayTx.filter(t => t.dailyExp).reduce((a,t) => a + num(t.amount), 0);
+    const indExp = dayTx.filter(t => t.type === "expense" && !t.dailyExp && !t.ownerDraw && !t.recId && !t.payrollBooked).reduce((a,t) => a + num(t.amount), 0);
+    if((sumInc && indInc) || (sumExp && indExp)){
+      alerts.push(`<div class="alertline"><span class="chip warn">入力の混在</span>${fmtDate(d)}: まとめ入力(${yen(sumInc + sumExp)})と個別記録(${yen(indInc + indExp)})が両方あります。二重計上でないか確認を(差額だけ入れているなら問題ありません) <button class="btn sm" onclick="V.moneyMonth='${d.slice(0, 7)}';go('money')">収支で確認 ›</button></div>`);
+    }
+  }
   const hasData = S.tx.length > 0;
   $("main").innerHTML =
     pageHead(`${esc(S.settings.name)} のダッシュボード`, `${fmtDate(tday)} ・ 今日もお疲れさまです`,
@@ -1093,8 +1156,9 @@ function attachChartTips(){
       const d = _chartData[+r.dataset.ci];
       tip.innerHTML = d.tip || `<strong>${fmtMonth(d.m)}</strong><br>収入 ${yen(d.inc)}<br>支出 ${yen(d.exp)}<br>差引 ${yen(d.inc - d.exp)}`;
       tip.style.display = "block";
-      const wrap = r.closest(".chartwrap").getBoundingClientRect();
-      let x = ev.clientX - wrap.left + 14, ty = ev.clientY - wrap.top - 10;
+      const cw = r.closest(".chartwrap");
+      const wrap = cw.getBoundingClientRect();
+      let x = ev.clientX - wrap.left + cw.scrollLeft + 14, ty = ev.clientY - wrap.top - 10;
       if(x + 150 > wrap.width) x -= 165;
       tip.style.left = x + "px"; tip.style.top = ty + "px";
     });
@@ -1406,24 +1470,52 @@ VIEWS.money = function(){
       </div>
       ${pay || labor ? `<div class="hint">給料は<a href="javascript:void(0)" onclick="go('payroll')" style="color:var(--info)">給料管理</a>の自動計算(締日ベース)です。「支出に計上」を押すまで上の支出・下の明細には入りませんが、<strong>利益には自動で反映されています</strong>。${labor ? `給料管理から計上した従業員給与(${yen(labor)})は二重に引かないよう「給料」の側でのみ数えています(手入力した人件費はふつうの経費として利益から引かれます)。${ownerPayFor(m) ? `<strong>事業主(あなた)の給料(${yen(ownerPayFor(m))})は経費・支出には数えず、利益の中から受け取る「事業主貸」</strong>として扱います。` : ""}` : "給料日に給料管理の「全員分を支出に計上」を押すと明細にも記録されます。"}</div>` : ""}
     </div>
-    <div class="card"><h2>明細 <span class="h2-sub">${list.length}件</span></h2>
-      <div class="twrap">${list.length ? `<table>
-        <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>支払方法</th><th>担当</th><th>メモ</th><th></th></tr>
-        ${list.map(t => `<tr>
-          <td style="white-space:nowrap">${fmtDate(t.date)}</td>
-          <td><span class="chip ${t.type === "income" ? "info" : "mut"}">${t.type === "income" ? "収入" : t.ownerDraw ? "事業主貸" : "支出"}</span></td>
-          <td>${esc(t.category)}</td>
-          <td class="num" style="font-weight:600">${yen(t.amount)}</td>
-          <td style="font-size:12px;color:var(--ink2);white-space:nowrap">${t.type === "income" ? esc(t.pay || "現金") : ""}</td>
-          <td>${t.staffId ? esc(staffName(t.staffId)) : ""}</td>
-          <td style="color:var(--ink2);max-width:220px">${esc(t.memo)}</td>
-          <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editTx('${t.id}')">編集</button><button class="btn sm ghost" onclick="delTx('${t.id}')">削除</button></td>
-        </tr>`).join("")}</table>` : `<div class="empty">${fmtMonth(m)}の記録はまだありません</div>`}</div>
+    <div class="card">
+      <div class="f-row" style="max-width:320px;margin-bottom:10px">
+        <input class="searchbar" type="search" placeholder="メモ・カテゴリ・金額・担当で検索(全期間)" value="${esc(V.moneyQ || "")}" oninput="moneySearch(this.value)">
+      </div>
+      <div id="txlist"></div>
     </div>
     ${catRows ? `<div class="card"><h2>カテゴリ別集計</h2><div class="twrap"><table><tr><th>区分</th><th>カテゴリ</th><th class="num">合計</th></tr>${catRows}</table></div></div>` : ""}` +
     recurringCardHtml() +
     yearSummaryHtml(m.slice(0, 4));
+  renderTxList();
 };
+function txRowHtml(t, showDate){
+  return `<tr>
+    <td style="white-space:nowrap">${showDate ? esc(t.date.slice(0, 4)) + "年" : ""}${fmtDate(t.date)}</td>
+    <td><span class="chip ${t.type === "income" ? "info" : "mut"}">${t.type === "income" ? "収入" : t.ownerDraw ? "事業主貸" : "支出"}</span></td>
+    <td>${esc(t.category)}</td>
+    <td class="num" style="font-weight:600">${yen(t.amount)}</td>
+    <td style="font-size:12px;color:var(--ink2);white-space:nowrap">${t.type === "income" ? esc(t.pay || "現金") : ""}</td>
+    <td>${t.staffId ? esc(staffName(t.staffId)) : ""}</td>
+    <td style="color:var(--ink2);max-width:220px">${esc(t.memo)}</td>
+    <td style="white-space:nowrap"><button class="btn sm ghost" onclick="editTx('${t.id}')">編集</button><button class="btn sm ghost" onclick="delTx('${t.id}')">削除</button></td>
+  </tr>`;
+}
+/* 明細一覧。検索語があるときは月をまたいで全期間から探す(「あの支払いいつだっけ」用) */
+window.moneySearch = q => { V.moneyQ = q; renderTxList(); };
+function renderTxList(){
+  const el = $("txlist"); if(!el) return;
+  const q = (V.moneyQ || "").trim().toLowerCase();
+  let list, label, showDate = false;
+  if(q){
+    list = S.tx.filter(t => [t.memo, t.category, t.staffId ? staffName(t.staffId) : "", String(num(t.amount)), t.pay, t.date]
+      .some(v => String(v || "").toLowerCase().includes(q)))
+      .sort((a,b) => (b.date || "").localeCompare(a.date || "") || (b.id > a.id ? 1 : -1));
+    const total = list.length;
+    list = list.slice(0, 200);
+    label = `検索結果 ${total}件・全期間${total > 200 ? "(新しい200件を表示)" : ""}`;
+    showDate = true;
+  } else {
+    list = txInMonth(V.moneyMonth).sort((a,b) => b.date.localeCompare(a.date) || (b.id > a.id ? 1 : -1));
+    label = `${list.length}件`;
+  }
+  el.innerHTML = `<h2>明細 <span class="h2-sub">${label}</span></h2>
+    <div class="twrap">${list.length ? `<table>
+      <tr><th>日付</th><th>区分</th><th>カテゴリ</th><th class="num">金額</th><th>支払方法</th><th>担当</th><th>メモ</th><th></th></tr>
+      ${list.map(t => txRowHtml(t, showDate)).join("")}</table>` : `<div class="empty">${q ? "該当する記録が見つかりません" : fmtMonth(V.moneyMonth) + "の記録はまだありません"}</div>`}</div>`;
+}
 /* 定期支出(毎月自動計上)の管理カード */
 function recurringCardHtml(){
   const rows = (S.recurring || []).map(r => {
@@ -1467,7 +1559,7 @@ window.editRecurring = function(id){
 };
 window.delRecurring = function(id){
   ask("この定期支出を停止しますか?(計上済みの記録はそのまま残ります)", () => {
-    S.recurring = S.recurring.filter(x => x.id !== id); save(); toast("停止しました"); render();
+    delWithUndo("recurring", id, "定期支出");
   });
 };
 /* 年間集計(確定申告の下ごしらえ用)。表示中の月の年で集計する */
@@ -1809,7 +1901,7 @@ window.editTx = function(id){
     } });
 };
 window.delTx = function(id){
-  ask("この記録を削除しますか?", () => { S.tx = S.tx.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+  ask("この記録を削除しますか?", () => delWithUndo("tx", id, "収支の記録"));
 };
 window.exportTxCsv = function(){
   const m = V.moneyMonth;
@@ -1875,7 +1967,7 @@ window.editRcpt = function(id){
     onsave: v => { Object.assign(r, v); save(); toast("更新しました"); render(); } });
 };
 window.delRcpt = function(id){
-  ask("この領収書を削除しますか?", () => { S.receipts = S.receipts.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+  ask("この領収書を削除しますか?", () => delWithUndo("receipts", id, "領収書"));
 };
 window.viewRcpt = function(id){
   const r = S.receipts.find(x => x.id === id); if(!r || !r.img) return;
@@ -1948,7 +2040,7 @@ window.addShift = function(staffId, date){
 window.editShift = function(id){
   const s = S.shifts.find(x => x.id === id); if(!s) return;
   const fs = shiftFields();
-  window._delShift = () => { closeModal(); ask("このシフトを削除しますか?", () => { S.shifts = S.shifts.filter(x => x.id !== id); save(); toast("削除しました"); render(); }); };
+  window._delShift = () => { closeModal(); ask("このシフトを削除しますか?", () => delWithUndo("shifts", id, "シフト")); };
   openForm({ title: `${staffName(s.staffId)} ・ ${fmtDate(s.date)} のシフト`, fields: fs, data: s, validate: shiftValidate,
     onsave: v => {
       const doIt = () => { Object.assign(s, v); save(); toast("更新しました"); render(); };
@@ -2413,7 +2505,7 @@ window.moveStaff = function(id, dir){
 };
 window.delStaff = function(id){
   ask("このスタッフを削除しますか?(シフト・給与の記録も表示されなくなります。賃金台帳は法律で3年間の保存義務があるため、退社したスタッフは削除せず「退社月」の設定をおすすめします)", () => {
-    S.staff = S.staff.filter(x => x.id !== id); save(); toast("削除しました"); render();
+    delWithUndo("staff", id, "スタッフ");
   });
 };
 /* ================= orders ================= */
@@ -2472,7 +2564,7 @@ window.editOrder = function(id){
     onsave: v => { Object.assign(o, v); save(); toast("更新しました"); render(); } });
 };
 window.delOrder = function(id){
-  ask("この発注を削除しますか?", () => { S.orders = S.orders.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+  ask("この発注を削除しますか?", () => delWithUndo("orders", id, "発注"));
 };
 window.advOrder = function(id, status){
   const o = S.orders.find(x => x.id === id); if(!o) return;
@@ -2549,7 +2641,7 @@ window.editInv = function(id){
     onsave: v => { Object.assign(i, v); save(); toast("更新しました"); render(); } });
 };
 window.delInv = function(id){
-  ask("この品目を削除しますか?", () => { S.inv = S.inv.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+  ask("この品目を削除しますか?", () => delWithUndo("inv", id, "在庫品目"));
 };
 window.invQty = function(id, d){
   const i = S.inv.find(x => x.id === id); if(!i) return;
@@ -2639,7 +2731,7 @@ window.addCust = function(){
 };
 window.editCust = function(id){
   const c = S.customers.find(x => x.id === id); if(!c) return;
-  window._delCust = () => { closeModal(); ask("この顧客とカルテを削除しますか?", () => { S.customers = S.customers.filter(x => x.id !== id); V.custSel = null; save(); toast("削除しました"); render(); }); };
+  window._delCust = () => { closeModal(); ask("この顧客とカルテを削除しますか?", () => { V.custSel = null; delWithUndo("customers", id, "顧客カルテ"); }); };
   openForm({ title:"顧客情報を編集", fields: custFields(), data: c,
     onsave: v => { Object.assign(c, v); save(); toast("更新しました"); render(); } });
   document.querySelector(".m-foot").insertAdjacentHTML("afterbegin", `<button type="button" class="btn danger" style="margin-right:auto" onclick="_delCust()">削除</button>`);
@@ -2666,7 +2758,15 @@ window.addVisit = function(custId){
 };
 window.delVisit = function(custId, visitId){
   const c = S.customers.find(x => x.id === custId); if(!c) return;
-  ask("この来店記録を削除しますか?", () => { c.visits = c.visits.filter(v => v.id !== visitId); save(); toast("削除しました"); render(); });
+  ask("この来店記録を削除しますか?", () => {
+    const idx = c.visits.findIndex(v => v.id === visitId);
+    if(idx < 0) return;
+    const v = c.visits[idx];
+    c.visits.splice(idx, 1);
+    save();
+    undoToast("来店記録を削除しました", () => c.visits.splice(Math.min(idx, c.visits.length), 0, v));
+    render();
+  });
 };
 /* ================= appointments ================= */
 window.apptNav = d => { V.apptDate = addDays(V.apptDate, d); render(); };
@@ -2821,7 +2921,7 @@ window.editAppt = function(id){
     onsave: v => saveApptWithCheck(v, id) });
 };
 window.delAppt = function(id){
-  ask("この予約を削除しますか?", () => { S.appts = S.appts.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+  ask("この予約を削除しますか?", () => delWithUndo("appts", id, "予約"));
 };
 /* 予約の行タップで操作メニューを開く(スマホでは右端のボタンが見えないため)。ボタン自体のタップは素通し */
 window.apptRowTap = function(ev, id){
@@ -3225,7 +3325,7 @@ window.editTicket = function(id){
     onsave: v => { Object.assign(t, v); t.used = Math.min(num(t.used), num(t.total)); save(); toast("更新しました"); render(); } });
 };
 window.delTicket = function(id){
-  ask("この回数券を削除しますか?", () => { S.tickets = S.tickets.filter(x => x.id !== id); save(); toast("削除しました"); render(); });
+  ask("この回数券を削除しますか?", () => delWithUndo("tickets", id, "回数券"));
 };
 window.useTicket = function(id){
   const t = S.tickets.find(x => x.id === id); if(!t) return;
@@ -3419,7 +3519,7 @@ window.editMenu = function(id){
 };
 window.delMenu = function(id){
   ask("このメニューを削除しますか?(過去の記録はそのまま残ります)", () => {
-    S.menus = S.menus.filter(x => x.id !== id); save(); toast("削除しました"); render();
+    delWithUndo("menus", id, "メニュー");
   });
 };
 /* ================= tax estimate (納税予想) =================
